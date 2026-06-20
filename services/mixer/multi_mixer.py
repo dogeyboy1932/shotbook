@@ -148,6 +148,7 @@ async def mix_multi_dialogue(
     dialogue_pcms: list[bytes],
     sfx_pcm: bytes | None,
     total_duration_ms: int,
+    gap_ms: int = 800,
 ) -> AsyncIterator[bytes]:
     """Mix multiple dialogue lines with ambient SFX and stream the result.
 
@@ -178,7 +179,7 @@ async def mix_multi_dialogue(
     cumulative = 0
     for i, dur in enumerate(durations_ms):
         delays_ms.append(cumulative)
-        cumulative += dur + (GAP_BETWEEN_LINES_MS if i < len(durations_ms) - 1 else 0)
+        cumulative += dur + (gap_ms if i < len(durations_ms) - 1 else 0)
 
     # Create pipe pairs FIRST so we know the real file descriptors
     total_inputs = n_dialogue + (1 if has_sfx else 0)

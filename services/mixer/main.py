@@ -118,7 +118,10 @@ async def audio_prompt_endpoint(request: AudioPromptRequest):
 
     async def generate():
         async for chunk in mix_multi_dialogue(
-            dialogue_pcms, sfx_pcm, total_duration_ms
+            dialogue_pcms,
+            sfx_pcm,
+            total_duration_ms,
+            gap_ms=request.gap_between_lines_ms,
         ):
             yield chunk
 

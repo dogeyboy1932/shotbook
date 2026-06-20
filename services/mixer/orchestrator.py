@@ -182,12 +182,15 @@ async def dispatch_from_prompt(
     """
     parsed = parse_audio_prompt(prompt_text)
 
-    # Generate TTS for each dialogue line concurrently
-    tts_tasks = []
+    # Generate TTS for each dialogue line SEQUENTIALLY
+    # Fish Speech can't handle concurrent synthesis — the second call
+    # returns empty/truncated PCM if fired while the first is still running.
+    dialogue_pcms = []
     for i, line in enumerate(parsed.dialogue_lines):
         speaker_id = f"character_{line.speaker.lower().replace(' ', '_')}_profile"
         seq_id = f"{book_id}_line_{i}"
-        tts_tasks.append(_collect_tts(client, line.text, speaker_id, seq_id))
+        pcm = await _collect_tts(client, line.text, speaker_id, seq_id)
+        dialogue_pcms.append(pcm)
 
     # Generate SFX for ambient descriptions concurrently with TTS
     sfx_task = None
@@ -201,10 +204,7 @@ async def dispatch_from_prompt(
             _collect_sfx_pcm(client, f"{book_id}_ambient", sfx_track)
         )
 
-    # Wait for all TTS
-    dialogue_pcms = await asyncio.gather(*tts_tasks)
-
-    # Wait for SFX if requested
+    # Wait for SFX if requested (runs concurrently with last TTS call)
     sfx_pcm = await sfx_task if sfx_task else b""
 
     # Calculate total duration (dialogue + gaps)
