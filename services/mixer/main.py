@@ -11,7 +11,13 @@ from fastapi.responses import StreamingResponse
 from .multi_mixer import mix_multi_dialogue
 from .orchestrator import dispatch, dispatch_from_prompt
 from .pipe_mixer import mix_audio
-from .schema import AudioPromptRequest, MuxRequest, ScriptBlock
+from .schema import (
+    AudioPromptRequest,
+    ComposeSceneRequest,
+    JobStatus,
+    MuxRequest,
+    ScriptBlock,
+)
 
 _http_client: httpx.AsyncClient | None = None
 
@@ -254,6 +260,89 @@ async def mux_endpoint(request: MuxRequest):
             pass
 
     return StreamingResponse(file_stream(), media_type="video/mp4")
+
+
+@app.post("/compose-scene", response_model=JobStatus)
+async def compose_scene(request: ComposeSceneRequest):
+    """Start parallel video + audio generation. Returns job_id for polling."""
+    from .composer import create_job, run_compose_job
+
+    # Quick pre-flight
+    try:
+        from .orchestrator import SFX_SERVICE_URL, TTS_SERVICE_URL
+
+        for name, url in [("TTS", TTS_SERVICE_URL), ("SFX", SFX_SERVICE_URL)]:
+            r = await _http_client.get(f"{url}/health", timeout=3.0)
+            r.raise_for_status()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Service unreachable: {e}")
+
+    job = create_job(
+        request.video_prompt,
+        request.negative_prompt,
+        request.audio_prompt,
+        request.book_id,
+        request.speed,
+        request.gap_between_lines_ms,
+    )
+
+    # Fire background task (runs independently of the request)
+    asyncio.create_task(
+        run_compose_job(
+            job,
+            _http_client,
+            request.book_id,
+            request.speed,
+            request.gap_between_lines_ms,
+        )
+    )
+
+    return JobStatus(
+        job_id=job.job_id,
+        status=job.status,
+        progress=job.progress,
+    )
+
+
+@app.get("/compose-scene/{job_id}", response_model=JobStatus)
+async def compose_scene_status(job_id: str):
+    """Poll for job progress."""
+    from .composer import get_job
+
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    return JobStatus(
+        job_id=job.job_id,
+        status=job.status,
+        progress=job.progress,
+        error=job.error,
+    )
+
+
+@app.get("/compose-scene/{job_id}/result")
+async def compose_scene_result(job_id: str):
+    """Download the finished video."""
+    from .composer import get_job
+
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status == "failed":
+        raise HTTPException(status_code=500, detail=job.error or "Unknown error")
+    if job.status != "done" or not job.result_path:
+        raise HTTPException(status_code=409, detail=f"Not ready. Status: {job.status}")
+
+    def stream_result():
+        with open(job.result_path, "rb") as f:
+            while True:
+                chunk = f.read(65536)
+                if not chunk:
+                    break
+                yield chunk
+
+    return StreamingResponse(stream_result(), media_type="video/mp4")
 
 
 if __name__ == "__main__":

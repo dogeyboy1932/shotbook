@@ -31,3 +31,21 @@ class MuxRequest(BaseModel):
     speed: float = 1.0
     gap_between_lines_ms: int = 800
     book_id: str = "mux"
+
+
+class ComposeSceneRequest(BaseModel):
+    """Generate video + audio in parallel, then mux."""
+
+    video_prompt: str  # Wan2.2 text-to-video prompt
+    negative_prompt: str = "cartoon, cgi, anime, low quality, text, watermark"
+    audio_prompt: str  # audio_prompt format
+    book_id: str = "compose"
+    speed: float = 1.0
+    gap_between_lines_ms: int = 800
+
+
+class JobStatus(BaseModel):
+    job_id: str
+    status: str
+    progress: str
+    error: str | None = None
