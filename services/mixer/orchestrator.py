@@ -197,14 +197,14 @@ async def dispatch_from_prompt(
         )
         dialogue_pcms.append(pcm)
 
-    # Generate SFX for ambient descriptions concurrently with TTS
+    # Generate SFX for ambient descriptions — one cue per sound
     sfx_task = None
     sfx_track = []
     if parsed.ambient_descriptions:
-        # Spread ambient cues across the timeline
-        # For simplicity, generate one composite ambient cue
-        combined_prompt = ", ".join(parsed.ambient_descriptions)
-        sfx_track = [{"timestamp_ms": 0, "prompt": combined_prompt}]
+        # Each ambient description gets its own cue, spaced every 2s
+        for t, desc in enumerate(parsed.ambient_descriptions):
+            timestamp_ms = t * 2000  # stagger by 2s to give each its own slot
+            sfx_track.append({"timestamp_ms": timestamp_ms, "prompt": desc})
         sfx_task = asyncio.create_task(
             _collect_sfx_pcm(client, f"{book_id}_ambient", sfx_track)
         )
