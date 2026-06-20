@@ -1,7 +1,10 @@
 // Thin fetch wrapper around the book_video_gen FastAPI backend (app/main.py).
-// Base URL is read from VITE_API_BASE_URL so it's configurable per
-// environment without touching code; defaults to the local dev backend.
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080'
+// Defaults to relative paths, which Vite's dev server proxies to the
+// backend (see vite.config.ts) -- this is what makes "frontend + backend
+// both running on a remote box, only this dev server's port tunneled
+// back" work with zero config. Set VITE_API_BASE_URL only if the backend
+// is reachable on a different origin than this dev server.
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
 
 export interface BookSummary {
   book_id: number
