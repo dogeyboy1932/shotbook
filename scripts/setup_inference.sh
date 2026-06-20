@@ -44,7 +44,20 @@ python3 -m venv /tmp/vllm-venv
 
 # ninja pip package required for FlashInfer JIT; ninja-build (apt) above isn't enough
 /tmp/vllm-venv/bin/pip install --quiet ninja
-/tmp/vllm-venv/bin/pip install --quiet vllm
+
+# Pin vLLM to the 0.8.x line. Newer vLLM (0.9+) ships PyTorch built against
+# CUDA 12.6/12.8/12.9, which fails on hosts whose NVIDIA driver only supports
+# CUDA 12.4 with:
+#   "RuntimeError: The NVIDIA driver on your system is too old (found 12040)"
+# vLLM 0.8.5 bundles torch 2.6.0+cu124, which runs natively on a 12.4 driver.
+# Bump this only after confirming the host driver supports the newer CUDA build.
+/tmp/vllm-venv/bin/pip install --quiet "vllm==0.8.5.post1"
+
+# vLLM 0.8.5 declares `transformers>=4.51.1` with no upper bound, so pip happily
+# installs transformers 5.x. The 5.x tokenizer-backend refactor (TokenizersBackend)
+# drops all_special_tokens_extended, which vLLM 0.8.5 still calls, crashing at
+# tokenizer init. Pin to the 4.51.x line vLLM 0.8.5 was built against.
+/tmp/vllm-venv/bin/pip install --quiet "transformers==4.51.3"
 
 echo ""
 echo "vLLM installed. Llama-3.1 is a gated model — authenticate with HuggingFace:"
@@ -87,6 +100,7 @@ git checkout v1.5.1
 # `huggingface-cli` entry point used below, and changes the model loading path.
 /tmp/fish-venv/bin/pip install --quiet \
   "transformers<=4.57.3" \
+  "pyrootutils" \
   "funasr" \
   "vector_quantize_pytorch==1.14.24" \
   "faster-whisper" \
