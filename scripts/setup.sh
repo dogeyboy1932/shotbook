@@ -50,6 +50,7 @@ echo ""
 echo "Installing system build dependencies for audiocraft..."
 apt-get install -y --quiet \
   pkg-config \
+  "python${PYVER}-dev" \
   libavformat-dev \
   libavcodec-dev \
   libavdevice-dev \
