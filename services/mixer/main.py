@@ -6,9 +6,10 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
-from .orchestrator import dispatch
+from .multi_mixer import mix_multi_dialogue
+from .orchestrator import dispatch, dispatch_from_prompt
 from .pipe_mixer import mix_audio
-from .schema import ScriptBlock
+from .schema import AudioPromptRequest, ScriptBlock
 
 _http_client: httpx.AsyncClient | None = None
 
@@ -16,7 +17,9 @@ _http_client: httpx.AsyncClient | None = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _http_client
-    _http_client = httpx.AsyncClient(timeout=httpx.Timeout(connect=5.0, read=120.0, write=30.0, pool=5.0))
+    _http_client = httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=5.0, read=120.0, write=30.0, pool=5.0)
+    )
     yield
     await _http_client.aclose()
 
@@ -70,6 +73,35 @@ async def mix_rest(block: ScriptBlock):
     return StreamingResponse(generate(), media_type="audio/mpeg")
 
 
+@app.post("/audio_prompt")
+async def audio_prompt_endpoint(request: AudioPromptRequest):
+    """Accept an audio_prompt text block and return mixed audio.
+
+    The audio_prompt format describes ambient sound effects and multi-character
+    dialogue with voice characteristics. The backend generates TTS for each
+    dialogue line, generates SFX for ambient sounds, sequences them with proper
+    timing, and returns AAC audio in an MP4 container ready for video muxing.
+
+    Returns a streaming response with ``video/mp4`` MIME type (AAC audio only,
+    no video track).
+    """
+    dialogue_pcms, sfx_pcm, total_duration_ms = await dispatch_from_prompt(
+        _http_client,
+        request.audio_prompt,
+        request.book_id,
+        gap_ms=request.gap_between_lines_ms,
+    )
+
+    async def generate():
+        async for chunk in mix_multi_dialogue(
+            dialogue_pcms, sfx_pcm, total_duration_ms
+        ):
+            yield chunk
+
+    return StreamingResponse(generate(), media_type="video/mp4")
+
+
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run("services.mixer.main:app", host="0.0.0.0", port=8003, reload=False)
