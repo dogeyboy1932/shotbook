@@ -4,7 +4,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 import numpy as np
 import torch
-import imageio  # pip install imageio imageio-ffmpeg
+import imageio
 from PIL import Image
 from diffusers import WanPipeline, AutoencoderKLWan, UniPCMultistepScheduler
 
@@ -14,29 +14,31 @@ from diffusers import WanPipeline, AutoencoderKLWan, UniPCMultistepScheduler
 #    - transformer in bfloat16 (fast on H100)
 # ---------------------------------------------------------------------------
 print("Loading Wan2.2 TI2V-5B...")
-model_id = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
+# model_id = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
+model_id = "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
 
 vae = AutoencoderKLWan.from_pretrained(model_id, subfolder="vae", torch_dtype=torch.float32)
 pipe = WanPipeline.from_pretrained(model_id, vae=vae, torch_dtype=torch.bfloat16)
+pipe.to("cuda")
+pipe.vae.enable_tiling()   
 
 # Apply flow_shift by rebuilding the scheduler (mutating .config alone is a no-op)
-pipe.scheduler.config.flow_shift = 12.0
-pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config)
+# pipe.scheduler.config.flow_shift = 12.0
+# pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config)
 
-pipe.to("cuda")
 
 # ---------------------------------------------------------------------------
 # 2. Generate frames
 # ---------------------------------------------------------------------------
-prompt=""
-with open("prompt.txt", "r") as file:
-    file_content = file.read()
+prompt="A realistic, cinematic fantasy depiction of the tortoise and the hare race. An anthropomorphic hare with expressive features speeds past a towering oak tree on a winding forest path, looking back mockingly. In the background, a wise, weathered tortoise moves with slow, deliberate, powerful steps. Sunbeams filtering through the forest canopy, highly detailed fur and shell textures, dramatic depth of field, epic storytelling atmosphere, 8k resolution."
+# with open("prompt.txt", "r") as file:
+#     file_content = file.read()
     
-    # Split at the "=" sign to separate the variable name from the string
-    string_part = file_content.split("=", 1)[1].strip()
+#     # Split at the "=" sign to separate the variable name from the string
+#     string_part = file_content.split("=", 1)[1].strip()
     
-    # Safely evaluate the Python string literal (handles the parentheses and quotes)
-    prompt = ast.literal_eval(string_part)
+#     # Safely evaluate the Python string literal (handles the parentheses and quotes)
+#     prompt = ast.literal_eval(string_part)
 
 negative_prompt = (
     "Bright tones, overexposed, static, blurred details, subtitles, "
@@ -48,7 +50,7 @@ frames = pipe(
     prompt=prompt,
     negative_prompt=negative_prompt,
     width=1280,
-    height=704,            # 704, not 720 — matches the VAE's compression grid
+    height=720,
     num_frames=81,
     guidance_scale=5.0,
     num_inference_steps=50,
