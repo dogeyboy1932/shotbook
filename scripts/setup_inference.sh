@@ -59,6 +59,14 @@ python3 -m venv /tmp/vllm-venv
 # tokenizer init. Pin to the 4.51.x line vLLM 0.8.5 was built against.
 /tmp/vllm-venv/bin/pip install --quiet "transformers==4.51.3"
 
+# Same story for the web stack: vLLM 0.8.5 declares unbounded `fastapi>=0.115.0`
+# and `prometheus-fastapi-instrumentator>=7.0.0`, so pip pulls Starlette >=0.47,
+# whose route objects (_IncludedRouter) lack `.path`. vLLM's Prometheus metrics
+# middleware then throws on every request:
+#   AttributeError: '_IncludedRouter' object has no attribute 'path'  -> HTTP 500
+# Pin FastAPI/Starlette to the versions vLLM 0.8.5.post1 shipped against.
+/tmp/vllm-venv/bin/pip install --quiet "fastapi==0.115.12" "starlette==0.46.2"
+
 echo ""
 echo "vLLM installed. Llama-3.1 is a gated model — authenticate with HuggingFace:"
 echo "  /tmp/vllm-venv/bin/huggingface-cli login"

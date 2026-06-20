@@ -25,7 +25,13 @@ SGLANG_TTS_URL=${SGLANG_TTS_URL:-http://localhost:30001} \
   "$UVICORN" services.tts.main:app --host 0.0.0.0 --port "$TTS_PORT" &
 PID_TTS=$!
 
-SFX_GPU_DEVICE=${SFX_GPU_DEVICE:-cuda:2} \
+# Pin the SFX process to ONE physical GPU via CUDA_VISIBLE_DEVICES so AudioGen
+# only ever sees cuda:0 (in every thread). This avoids audiocraft's autocast
+# rejecting 'cuda:N' and the cross-thread device mismatch during generation.
+# Accepts SFX_CUDA_DEVICE=2 or the legacy SFX_GPU_DEVICE=cuda:2 form.
+SFX_CUDA_DEVICE=${SFX_CUDA_DEVICE:-${SFX_GPU_DEVICE:-cuda:2}}
+SFX_CUDA_DEVICE=${SFX_CUDA_DEVICE#cuda:}
+CUDA_VISIBLE_DEVICES=$SFX_CUDA_DEVICE \
   "$UVICORN" services.sfx.main:app --host 0.0.0.0 --port "$SFX_PORT" &
 PID_SFX=$!
 
