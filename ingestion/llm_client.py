@@ -102,7 +102,10 @@ class GpuWorkerPool:
                             "temperature": temperature,
                             # vLLM-specific structured decoding: the server guarantees
                             # the completion is valid JSON conforming to this schema.
-                            "extra_body": {"guided_json": json_schema},
+                            # Must be a top-level field -- "extra_body" is an
+                            # openai-python SDK convention for flattening params into
+                            # the request body, and is meaningless to a raw httpx POST.
+                            "structured_outputs": {"json": json_schema},
                         },
                     )
                 response.raise_for_status()

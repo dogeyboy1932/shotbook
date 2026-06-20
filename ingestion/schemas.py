@@ -9,6 +9,8 @@ malformed JSON syntax, which guided decoding makes structurally impossible.
 """
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------------
@@ -93,7 +95,7 @@ class ParagraphBeat(BaseModel):
     sequence_index: int = Field(..., description="Echo back the input sequence_index unchanged")
     active_character_names: list[str] = Field(default_factory=list)
     active_location_name: str | None = None
-    camera_framing: str = Field(..., description=f"One of: {', '.join(VALID_CAMERA_FRAMINGS)}")
+    camera_framing: Literal[VALID_CAMERA_FRAMINGS]  # type: ignore[valid-type]
     action_summary: str = Field(..., description="One-line physical action/beat description for the video prompt")
     dialogue_script: list[DialogueLine] = Field(default_factory=list)
     sfx_prompts: list[str] = Field(default_factory=list, description="Discrete, isolated SFX text prompts")
