@@ -4,8 +4,8 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from audiogen import generate_cues, load_model
-from schema import SFXRequest, SFXResponse
+from .audiogen import generate_cues, load_model
+from .schema import SFXRequest, SFXResponse
 
 
 @asynccontextmanager

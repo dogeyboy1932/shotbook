@@ -7,7 +7,7 @@ import torch
 import torchaudio
 from audiocraft.models import AudioGen
 
-from schema import SFXCue, SFXCueResult
+from .schema import SFXCue, SFXCueResult
 
 MAX_DURATION = 4.0
 DEFAULT_DURATION = 2.0
