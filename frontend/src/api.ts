@@ -68,6 +68,7 @@ export interface VideoShot {
   camera: string
   action: string
   light: string
+  continuity: 'continuous_frame' | 'cut_same_scene' | 'cut_new_scene'
   prompt: string
 }
 

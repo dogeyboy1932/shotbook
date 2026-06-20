@@ -114,9 +114,26 @@ export default function ContextPanel({
               key={shot.shot_id}
               className="rounded border border-amber-400/20 bg-slate-900/40 p-2"
             >
-              <p className="text-xs font-mono uppercase tracking-wide text-amber-400/80">
-                {shot.shot_id}
-              </p>
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-mono uppercase tracking-wide text-amber-400/80">
+                  {shot.shot_id}
+                </p>
+                <span
+                  className={`rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${
+                    shot.continuity === 'continuous_frame'
+                      ? 'bg-emerald-400/20 text-emerald-300'
+                      : shot.continuity === 'cut_same_scene'
+                        ? 'bg-sky-400/20 text-sky-300'
+                        : 'bg-slate-700 text-slate-300'
+                  }`}
+                >
+                  {shot.continuity === 'continuous_frame'
+                    ? 'continues from prev'
+                    : shot.continuity === 'cut_same_scene'
+                      ? 'cut, same scene'
+                      : 'new scene'}
+                </span>
+              </div>
               <p className="mt-1 text-slate-400">
                 <span className="font-medium text-slate-300">camera: </span>
                 {shot.camera}

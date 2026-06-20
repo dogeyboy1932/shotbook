@@ -7,6 +7,8 @@ go to XTTS, and `sfx_prompts` go to the SFX (Stable Audio) model.
 """
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel
 
 
@@ -98,12 +100,22 @@ class VideoWorldPayload(BaseModel):
 class VideoShotPayload(BaseModel):
     """One shot in the breakdown -- the camera/action/light the LLM planned
     for it, plus `prompt`, the fully assembled text-to-video prompt (world
-    anchors + this shot's camera/action/light + style, in that order)."""
+    anchors + this shot's camera/action/light/continuity + style, in that
+    order).
+
+    `continuity` tells the video pipeline how this clip relates to the
+    previous one: "continuous_frame" (opens on the previous clip's final
+    frame -- one unbroken take, e.g. a held shot or camera move),
+    "cut_same_scene" (an ordinary edit cut to a new angle/subject within the
+    same ongoing scene, e.g. shot/reverse-shot dialogue -- no location or
+    time change), or "cut_new_scene" (an actual scene break -- location
+    change, time jump). Always "cut_new_scene" for the first shot in a plan."""
 
     shot_id: str
     camera: str
     action: str
     light: str
+    continuity: Literal["continuous_frame", "cut_same_scene", "cut_new_scene"]
     prompt: str
 
 

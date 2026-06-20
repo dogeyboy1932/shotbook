@@ -11,7 +11,7 @@
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,20 +27,9 @@ from app.schemas import (
     GenerationContextPayload,
     ParagraphPayload,
 )
-from app.video_prompting import generate_video_plan
-from ingestion.llm_client import GpuWorkerPool
+from app.video_prompting import VideoPlanningError, generate_video_plan
 
 router = APIRouter(prefix="/api", tags=["library"])
-
-
-def get_gpu_pool(request: Request) -> GpuWorkerPool:
-    pool = request.app.state.gpu_pool
-    if pool is None:
-        raise HTTPException(
-            status_code=503,
-            detail="LLM backend not configured -- set BVG_VLLM_ENDPOINTS and restart the API",
-        )
-    return pool
 
 
 @router.get("/books", response_model=list[BookSummaryPayload])
@@ -121,12 +110,11 @@ async def generate_context_batch(
 async def compose_scene_endpoint(
     request: ComposeSceneRequest,
     session: AsyncSession = Depends(get_db_session),
-    gpu_pool: GpuWorkerPool = Depends(get_gpu_pool),
 ) -> ComposedScenePayload:
     """Consolidation step: fetches state for every paragraph in the request,
-    merges them into one scene description, then has the LLM plan that
-    scene's video shot breakdown (one prompt per distinct shot) on top of
-    the deterministic audio prompt."""
+    merges them into one scene description, then has the Claude API plan
+    that scene's video shot breakdown (one prompt per distinct shot) on top
+    of the deterministic audio prompt."""
     if not request.paragraph_ids:
         raise HTTPException(status_code=400, detail="paragraph_ids must not be empty")
 
@@ -137,5 +125,8 @@ async def compose_scene_endpoint(
             detail=f"none of paragraph_ids={request.paragraph_ids} were found",
         )
     scene = compose_scene(payloads)
-    video_plan = await generate_video_plan(gpu_pool, scene)
+    try:
+        video_plan = await generate_video_plan(scene)
+    except VideoPlanningError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     return scene.model_copy(update={"video": video_plan})

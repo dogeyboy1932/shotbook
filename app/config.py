@@ -6,6 +6,7 @@ or the vLLM fleet.
 """
 from __future__ import annotations
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -58,6 +59,13 @@ class Settings(BaseSettings):
         "cartoon, 3d render, cgi, anime"
     )
     max_video_shots_per_scene: int = 4
+
+    # --- Claude API (compose-scene's video shot planning only --
+    # book ingestion stays on the local vLLM fleet above) ------------------
+    # Reads the SDK's own conventional env var name (no BVG_ prefix) so a
+    # plain `export ANTHROPIC_API_KEY=...` just works.
+    anthropic_api_key: str | None = Field(default=None, validation_alias="ANTHROPIC_API_KEY")
+    claude_video_model: str = "claude-opus-4-8"
 
 
 settings = Settings()
