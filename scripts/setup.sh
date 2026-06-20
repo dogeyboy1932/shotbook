@@ -72,6 +72,13 @@ pip install --quiet \
 echo "Installing audiocraft..."
 pip install --quiet audiocraft
 
+# audiocraft pulls in a recent transformers that requires torch>=2.4, but we're
+# pinned to torch 2.1.0. Downgrade to the last version that works with torch 2.1.
+# Without this, T5Conditioner (used by AudioGen) fails at startup with:
+#   "T5EncoderModel requires the PyTorch library but it was not found"
+echo "Pinning transformers to torch-2.1-compatible version..."
+pip install --quiet "transformers==4.44.2"
+
 # ── Dev / test dependencies ───────────────────────────────────────────────────
 echo ""
 echo "Installing test dependencies..."
@@ -81,7 +88,7 @@ pip install --quiet -r requirements-dev.txt
 if [ ! -f .env ]; then
   cp .env.example .env
   echo ""
-  echo "Created .env from .env.example — edit it to set SGLANG_DIRECTOR_URL, SGLANG_TTS_URL, etc."
+  echo "Created .env from .env.example — edit values if needed."
 fi
 
 echo ""

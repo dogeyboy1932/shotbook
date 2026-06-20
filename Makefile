@@ -1,7 +1,19 @@
-.PHONY: setup test smoke e2e full start wait
+.PHONY: setup setup-inference start-vllm start-tts test smoke e2e full start wait
 
+# Services venv (.venv) — FastAPI services only, no GPU needed
 setup:
 	bash scripts/setup.sh
+
+# External inference servers — vLLM + Fish Speech (run once per cluster)
+setup-inference:
+	bash scripts/setup_inference.sh
+
+# Start individual inference servers (each in its own tmux pane)
+start-vllm:
+	bash scripts/start_inference.sh vllm
+
+start-tts:
+	bash scripts/start_inference.sh tts
 
 # Unit + mocked integration tests (no GPU, no network)
 test:
