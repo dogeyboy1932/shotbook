@@ -180,6 +180,7 @@ class TestBuildFilterCmd:
 
         pcm = self._make_silent_pcm(1000)
         cmd = _build_filter_cmd(
+            read_fds=[3],
             dialogue_pcms=[pcm],
             durations_ms=[1000],
             delays_ms=[0],
@@ -190,7 +191,7 @@ class TestBuildFilterCmd:
         assert cmd[0] == "ffmpeg"
         assert "-f" in cmd
         assert "s16le" in cmd
-        assert "pipe:0" in cmd
+        assert "pipe:3" in cmd
         assert "-filter_complex" in cmd
         # Should output AAC in MP4
         assert "-c:a" in cmd
@@ -206,6 +207,7 @@ class TestBuildFilterCmd:
         sfx = self._make_silent_pcm(3000)
 
         cmd = _build_filter_cmd(
+            read_fds=[3, 4, 5],
             dialogue_pcms=[pcm1, pcm2],
             durations_ms=[2000, 1500],
             delays_ms=[0, 2800],
@@ -219,9 +221,9 @@ class TestBuildFilterCmd:
             if arg == "-i" and j + 1 < len(cmd) and cmd[j + 1].startswith("pipe:"):
                 pipe_inputs.append(cmd[j + 1])
         assert len(pipe_inputs) == 3
-        assert "pipe:0" in pipe_inputs
-        assert "pipe:1" in pipe_inputs
-        assert "pipe:2" in pipe_inputs
+        assert "pipe:3" in pipe_inputs
+        assert "pipe:4" in pipe_inputs
+        assert "pipe:5" in pipe_inputs
 
         filter_str = cmd[cmd.index("-filter_complex") + 1]
         assert "adelay=0|0" in filter_str
@@ -234,6 +236,7 @@ class TestBuildFilterCmd:
 
         sfx = self._make_silent_pcm(5000)
         cmd = _build_filter_cmd(
+            read_fds=[3],
             dialogue_pcms=[],
             durations_ms=[],
             delays_ms=[],

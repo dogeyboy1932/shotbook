@@ -20,24 +20,25 @@ GAP_BETWEEN_LINES_MS = 800  # silence between consecutive dialogue lines
 
 
 def _build_filter_cmd(
+    read_fds: list[int],
     dialogue_pcms: list[bytes],
     durations_ms: list[int],
     delays_ms: list[int],
     sfx_pcm: bytes | None,
     total_duration_ms: int,
 ) -> list[str]:
-    """Build the ffmpeg command with filter_complex."""
+    """Build the ffmpeg command with filter_complex.
+
+    ``read_fds`` are the actual OS file descriptor numbers for each
+    input pipe (must match what is passed via ``pass_fds``).
+    """
     cmd = ["ffmpeg", "-y"]
 
     n_dialogue = len(dialogue_pcms)
     has_sfx = sfx_pcm is not None and len(sfx_pcm) > 0
 
-    for i in range(n_dialogue):
-        cmd += ["-f", "s16le", "-ar", str(TARGET_RATE), "-ac", "1", "-i", f"pipe:{i}"]
-
-    if has_sfx:
-        sfx_idx = n_dialogue
-        cmd += ["-f", "s16le", "-ar", str(TARGET_RATE), "-ac", "1", "-i", f"pipe:{sfx_idx}"]
+    for fd in read_fds:
+        cmd += ["-f", "s16le", "-ar", str(TARGET_RATE), "-ac", "1", "-i", f"pipe:{fd}"]
 
     filters = []
 
@@ -58,8 +59,7 @@ def _build_filter_cmd(
             f"atrim=duration={target_sec}[ambient]"
         )
         filters.append(
-            "[vocal][ambient]amix=inputs=2:duration=first"
-            ":weights=1 0.55[out]"
+            "[vocal][ambient]amix=inputs=2:duration=first:weights=1 0.55[out]"
         )
         output_label = "[out]"
     else:
@@ -72,12 +72,17 @@ def _build_filter_cmd(
 
     # Output: AAC in MP4 container (compatible with MP4 video muxing)
     cmd += [
-        "-map", output_label,
-        "-c:a", "aac",
-        "-b:a", "192k",
-        "-f", "mp4",
+        "-map",
+        output_label,
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-f",
+        "mp4",
         "pipe:1",
-        "-loglevel", "error",
+        "-loglevel",
+        "error",
     ]
     return cmd
 
@@ -89,9 +94,7 @@ async def _write_all_to_fd(
     view = memoryview(data)
     offset = 0
     while offset < len(view):
-        written = await loop.run_in_executor(
-            None, os.write, fd, bytes(view[offset:])
-        )
+        written = await loop.run_in_executor(None, os.write, fd, bytes(view[offset:]))
         offset += written
 
 
@@ -155,20 +158,23 @@ async def mix_multi_dialogue(
     cumulative = 0
     for i, dur in enumerate(durations_ms):
         delays_ms.append(cumulative)
-        cumulative += dur + (
-            GAP_BETWEEN_LINES_MS if i < len(durations_ms) - 1 else 0
-        )
+        cumulative += dur + (GAP_BETWEEN_LINES_MS if i < len(durations_ms) - 1 else 0)
 
-    cmd = _build_filter_cmd(
-        dialogue_pcms, durations_ms, delays_ms,
-        sfx_pcm, total_duration_ms,
-    )
-
-    # Create pipe pairs for each input
+    # Create pipe pairs FIRST so we know the real file descriptors
     total_inputs = n_dialogue + (1 if has_sfx else 0)
     pipes = [os.pipe() for _ in range(total_inputs)]
+    read_fds = [r for r, w in pipes]
 
-    pass_fds = [r for r, w in pipes]
+    cmd = _build_filter_cmd(
+        read_fds,
+        dialogue_pcms,
+        durations_ms,
+        delays_ms,
+        sfx_pcm,
+        total_duration_ms,
+    )
+
+    pass_fds = list(read_fds)  # copy before we close them below
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -208,9 +214,7 @@ async def mix_multi_dialogue(
         None, _read_ffmpeg_output, proc, out_queue, loop
     )
     stderr_sink: list[bytes] = []
-    stderr_future = loop.run_in_executor(
-        None, _read_ffmpeg_stderr, proc, stderr_sink
-    )
+    stderr_future = loop.run_in_executor(None, _read_ffmpeg_stderr, proc, stderr_sink)
 
     try:
         while True:
