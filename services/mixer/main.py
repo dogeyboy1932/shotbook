@@ -2,7 +2,7 @@ import json
 from contextlib import asynccontextmanager
 
 import httpx
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -89,7 +89,6 @@ async def audio_prompt_endpoint(request: AudioPromptRequest):
     try:
         from .orchestrator import SFX_SERVICE_URL, TTS_SERVICE_URL
 
-        health_ok = True
         try:
             r = await _http_client.get(f"{TTS_SERVICE_URL}/health", timeout=3.0)
             r.raise_for_status()
