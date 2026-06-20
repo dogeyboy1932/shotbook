@@ -8,7 +8,7 @@ from .prompts import SYSTEM_PROMPT, build_user_message
 from .schema import HighlightRequest, ScriptBlock
 
 _SGLANG_URL = os.getenv("SGLANG_DIRECTOR_URL", "http://localhost:30000")
-_MODEL = "meta-llama/Meta-Llama-3-8B-Instruct"
+_MODEL = os.getenv("DIRECTOR_MODEL", "meta-llama/Meta-Llama-3.1-8B-Instruct")
 
 _client: httpx.AsyncClient | None = None
 
