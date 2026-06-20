@@ -61,8 +61,11 @@ apt-get install -y --quiet \
 
 # ── PyTorch + AudioCraft (SFX service) ──────────────────────────────────────
 echo ""
-echo "Installing PyTorch with CUDA 12.1 support (SFX service)..."
-pip install --quiet torch torchaudio \
+echo "Installing PyTorch 2.1.0 with CUDA 12.1 support (pinned for audiocraft compatibility)..."
+pip install --quiet \
+  "torch==2.1.0" \
+  "torchaudio==2.1.0" \
+  "torchvision==0.16.0" \
   --index-url https://download.pytorch.org/whl/cu121
 
 echo "Installing audiocraft..."
