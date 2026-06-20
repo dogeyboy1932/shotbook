@@ -168,36 +168,57 @@ async def dispatch_from_prompt(
     prompt_text: str,
     book_id: str = "audio_prompt",
     gap_ms: int = 800,
-) -> tuple[list[bytes], bytes, int, list[str]]:
+) -> tuple[list[bytes], bytes, int, list[str], list[str]]:
     """Parse an audio_prompt and generate TTS + SFX for all elements.
+
+    Lines from the same speaker are batched into a single TTS call so the
+    voice stays consistent (Fish Speech's default voice varies per call).
 
     Returns
     -------
     dialogue_pcms:
-        List of raw s16le PCM bytes, one per dialogue line.
+        One PCM buffer per speaker group, in appearance order.
     sfx_pcm:
-        Raw s16le PCM bytes for ambient SFX (empty if none).
+        Raw s16le PCM for ambient SFX.
     total_duration_ms:
         Estimated total duration including gaps.
     dialogue_texts:
-        Original text for each dialogue line (for speech-rate normalization).
+        Original text for each group (for speech-rate normalization).
+    speaker_names:
+        Speaker name for each group (for logging).
     """
     parsed = parse_audio_prompt(prompt_text)
 
-    # Generate TTS for each dialogue line SEQUENTIALLY
-    dialogue_pcms = []
-    dialogue_texts = []
-    for i, line in enumerate(parsed.dialogue_lines):
-        speaker_id = f"character_{line.speaker.lower().replace(' ', '_')}_profile"
-        seq_id = f"{book_id}_line_{i}"
-        pcm = await _collect_tts(client, line.text, speaker_id, seq_id)
+    # Group lines by speaker, preserving order of first appearance
+    speaker_groups: list[
+        tuple[str, list[str]]
+    ] = []  # [(speaker, [text1, text2, ...]), ...]
+    speaker_order: list[str] = []
+    for line in parsed.dialogue_lines:
+        if line.speaker not in speaker_order:
+            speaker_order.append(line.speaker)
+            speaker_groups.append((line.speaker, []))
+        idx = speaker_order.index(line.speaker)
+        speaker_groups[idx][1].append(line.text)
+
+    # Generate one TTS call per speaker group
+    dialogue_pcms: list[bytes] = []
+    dialogue_texts: list[str] = []
+    speaker_names: list[str] = []
+    for speaker, texts in speaker_groups:
+        speaker_id = f"character_{speaker.lower().replace(' ', '_')}_profile"
+        seq_id = f"{book_id}_{speaker.lower().replace(' ', '_')}"
+        # Join all lines for this speaker with natural pause markers
+        combined_text = " ... ".join(texts)
+        pcm = await _collect_tts(client, combined_text, speaker_id, seq_id)
         dur_s = len(pcm) / 2 / 44100
         print(
-            f'[dispatch] Line {i}: {len(pcm)} bytes PCM ({dur_s:.1f}s) — "{line.text[:60]}..."',
+            f"[dispatch] {speaker} ({len(texts)} lines): {len(pcm)} bytes PCM ({dur_s:.1f}s)",
             flush=True,
         )
         dialogue_pcms.append(pcm)
-        dialogue_texts.append(line.text)
+        dialogue_texts.append(combined_text)
+        speaker_names.append(speaker)
 
     # Generate SFX for ambient descriptions — one cue per sound
     sfx_task = None
@@ -225,4 +246,4 @@ async def dispatch_from_prompt(
     # Add a small trailing padding
     total_ms += 500
 
-    return dialogue_pcms, sfx_pcm, total_ms, dialogue_texts
+    return dialogue_pcms, sfx_pcm, total_ms, dialogue_texts, speaker_names

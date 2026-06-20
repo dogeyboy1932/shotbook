@@ -106,11 +106,12 @@ async def test_dispatch_from_prompt_mocked(monkeypatch):
 
     monkeypatch.setattr("services.mixer.orchestrator._collect_tts", mock_tts)
     monkeypatch.setattr("services.mixer.orchestrator._collect_sfx_pcm", mock_sfx)
-    prompt = 'Dialogue: A: "Hello." | B: "Hi."'
+    prompt = 'Dialogue: A: "Hello." | A: "Again." | B: "Hi."'
     async with httpx.AsyncClient() as client:
-        pcms, sfx, total, texts = await dispatch_from_prompt(client, prompt)
-    assert len(pcms) == 2
+        pcms, sfx, total, texts, names = await dispatch_from_prompt(client, prompt)
+    assert len(pcms) == 2  # two speaker groups (A has 2 lines batched)
     assert len(texts) == 2
+    assert names == ["A", "B"]
     assert total > 0
 
 

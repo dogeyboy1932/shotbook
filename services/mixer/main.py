@@ -114,6 +114,7 @@ async def audio_prompt_endpoint(request: AudioPromptRequest):
         sfx_pcm,
         total_duration_ms,
         dialogue_texts,
+        _speaker_names,
     ) = await dispatch_from_prompt(
         _http_client,
         request.audio_prompt,
