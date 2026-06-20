@@ -1,16 +1,4 @@
-.venv/
-__pycache__/
-*.pyc
-.env
-.env.bak
-logs/
-
-frontend/node_modules/
-frontend/dist/
-/archive
-
 # --- Python Virtual Environments ---
-# This ignores your active (.venv) folder so you don't push gigabytes of dependencies to GitHub
 .venv/
 venv/
 env/
@@ -19,22 +7,25 @@ ENV/
 # --- Python Caching & Bytecode ---
 __pycache__/
 *.py[cod]
-*$py.class
+*.class
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
 
 # --- Secrets & Environment Variables ---
-# Crucial if you start using OpenAI, HuggingFace, or stable diffusion API keys later
 .env
+.env.bak
 .env.local
-.env.*
+.env.*.local
 secrets.json
 
-# --- Project Specifics (Optional) ---
-# If your prompt.txt is just for local testing, uncomment the line below to ignore it
-# prompt.txt
-# If your script generates images/outputs locally, ignore that folder:
+# --- Project Specifics ---
+frontend/node_modules/
+frontend/dist/
+/archive
+/tmp/
 outputs/
+logs/
 
 # --- IDEs and Editor Configs ---
 .vscode/
@@ -48,5 +39,3 @@ outputs/
 # --- OS Garbage ---
 .DS_Store
 Thumbs.db
-
-/logs
