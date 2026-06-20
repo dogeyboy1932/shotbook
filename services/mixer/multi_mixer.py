@@ -42,14 +42,19 @@ def _build_filter_cmd(
 
     filters = []
 
-    for i, delay_ms in enumerate(delays_ms):
-        filters.append(f"[{i}:a]adelay={delay_ms}|{delay_ms}[d{i}]")
+    if n_dialogue > 0:
+        # Each dialogue gets adelay, then all mixed into [vocal]
+        for i, delay_ms in enumerate(delays_ms):
+            filters.append(f"[{i}:a]adelay={delay_ms}|{delay_ms}[d{i}]")
 
-    dialogue_inputs = " ".join(f"[d{i}]" for i in range(n_dialogue))
-    filters.append(
-        f"{dialogue_inputs}amix=inputs={n_dialogue}:duration=longest"
-        f":dropout_transition=0[vocal]"
-    )
+        if n_dialogue == 1:
+            filters.append(f"[d0]acopy[vocal]")
+        else:
+            dialogue_inputs = " ".join(f"[d{i}]" for i in range(n_dialogue))
+            filters.append(
+                f"{dialogue_inputs}amix=inputs={n_dialogue}:duration=longest"
+                f":dropout_transition=0[vocal]"
+            )
 
     if has_sfx:
         sfx_idx = n_dialogue
@@ -58,13 +63,28 @@ def _build_filter_cmd(
             f"[{sfx_idx}:a]aloop=loop=-1:size=2e+09,"
             f"atrim=duration={target_sec}[ambient]"
         )
+
+    # Combine vocal + ambient, or use whichever is present
+    if n_dialogue > 0 and has_sfx:
         filters.append(
             "[vocal][ambient]amix=inputs=2:duration=first:weights=1 0.55[out]"
         )
         output_label = "[out]"
-    else:
+    elif n_dialogue > 0:
         target_sec = total_duration_ms / 1000.0
         filters.append(f"[vocal]atrim=duration={target_sec}[out]")
+        output_label = "[out]"
+    elif has_sfx:
+        target_sec = total_duration_ms / 1000.0
+        filters.append(f"[ambient]atrim=duration={target_sec}[out]")
+        output_label = "[out]"
+    else:
+        # No audio at all — generate silence
+        target_sec = total_duration_ms / 1000.0
+        total_samples = int(TARGET_RATE * target_sec)
+        filters.append(
+            f"aevalsrc=0:duration={target_sec}:sample_rate={TARGET_RATE}[out]"
+        )
         output_label = "[out]"
 
     filter_str = ";".join(filters)
