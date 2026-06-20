@@ -1,6 +1,41 @@
-/archive
+# --- Python Virtual Environments ---
 .venv/
+venv/
+env/
+ENV/
+
+# --- Python Caching & Bytecode ---
 __pycache__/
 *.py[cod]
+*.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Secrets & Environment Variables ---
 .env
+.env.bak
+.env.local
+.env.*.local
+secrets.json
+
+# --- Project Specifics ---
+frontend/node_modules/
+frontend/dist/
+/archive
 /tmp/
+outputs/
+logs/
+
+# --- IDEs and Editor Configs ---
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# --- OS Garbage ---
+.DS_Store
+Thumbs.db
