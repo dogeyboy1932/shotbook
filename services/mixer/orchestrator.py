@@ -168,7 +168,7 @@ async def dispatch_from_prompt(
     prompt_text: str,
     book_id: str = "audio_prompt",
     gap_ms: int = 800,
-) -> tuple[list[bytes], bytes, int]:
+) -> tuple[list[bytes], bytes, int, list[str]]:
     """Parse an audio_prompt and generate TTS + SFX for all elements.
 
     Returns
@@ -179,13 +179,14 @@ async def dispatch_from_prompt(
         Raw s16le PCM bytes for ambient SFX (empty if none).
     total_duration_ms:
         Estimated total duration including gaps.
+    dialogue_texts:
+        Original text for each dialogue line (for speech-rate normalization).
     """
     parsed = parse_audio_prompt(prompt_text)
 
     # Generate TTS for each dialogue line SEQUENTIALLY
-    # Fish Speech can't handle concurrent synthesis — the second call
-    # returns empty/truncated PCM if fired while the first is still running.
     dialogue_pcms = []
+    dialogue_texts = []
     for i, line in enumerate(parsed.dialogue_lines):
         speaker_id = f"character_{line.speaker.lower().replace(' ', '_')}_profile"
         seq_id = f"{book_id}_line_{i}"
@@ -196,6 +197,7 @@ async def dispatch_from_prompt(
             flush=True,
         )
         dialogue_pcms.append(pcm)
+        dialogue_texts.append(line.text)
 
     # Generate SFX for ambient descriptions — one cue per sound
     sfx_task = None
@@ -223,4 +225,4 @@ async def dispatch_from_prompt(
     # Add a small trailing padding
     total_ms += 500
 
-    return dialogue_pcms, sfx_pcm, total_ms
+    return dialogue_pcms, sfx_pcm, total_ms, dialogue_texts

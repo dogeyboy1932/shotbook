@@ -109,7 +109,12 @@ async def audio_prompt_endpoint(request: AudioPromptRequest):
     except HTTPException:
         raise
 
-    dialogue_pcms, sfx_pcm, total_duration_ms = await dispatch_from_prompt(
+    (
+        dialogue_pcms,
+        sfx_pcm,
+        total_duration_ms,
+        dialogue_texts,
+    ) = await dispatch_from_prompt(
         _http_client,
         request.audio_prompt,
         request.book_id,
@@ -123,6 +128,7 @@ async def audio_prompt_endpoint(request: AudioPromptRequest):
             total_duration_ms,
             gap_ms=request.gap_between_lines_ms,
             speed=request.speed,
+            dialogue_texts=dialogue_texts,
         ):
             yield chunk
 

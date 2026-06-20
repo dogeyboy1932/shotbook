@@ -45,6 +45,87 @@ def _normalize_pcm(pcm: bytes, target_peak: float = TARGET_PEAK) -> bytes:
     return normalized.tobytes()
 
 
+def _count_words(text: str) -> int:
+    """Count words in dialogue text for speech-rate calculation."""
+    return len(text.split())
+
+
+def _adjust_line_tempo(pcm: bytes, factor: float) -> bytes:
+    """Time-stretch s16le PCM using ffmpeg atempo (preserves pitch)."""
+    if abs(factor - 1.0) < 0.02:
+        return pcm
+    factor = max(0.5, min(2.0, factor))
+    proc = subprocess.run(
+        [
+            "ffmpeg",
+            "-f",
+            "s16le",
+            "-ar",
+            str(TARGET_RATE),
+            "-ac",
+            "1",
+            "-i",
+            "pipe:0",
+            "-filter:a",
+            f"atempo={factor:.3f}",
+            "-f",
+            "s16le",
+            "-ac",
+            "1",
+            "-ar",
+            str(TARGET_RATE),
+            "pipe:1",
+            "-loglevel",
+            "error",
+        ],
+        input=pcm,
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        print(f"[multi_mixer] atempo {factor:.2f}x failed, using original", flush=True)
+        return pcm
+    return proc.stdout
+
+
+def _normalize_speech_rates(
+    dialogue_pcms: list[bytes],
+    dialogue_texts: list[str],
+) -> list[bytes]:
+    """Adjust each line tempo so all speakers have roughly the same WPS."""
+    if len(dialogue_pcms) <= 1:
+        return list(dialogue_pcms)
+
+    wps_list: list[float] = []
+    for pcm, text in zip(dialogue_pcms, dialogue_texts):
+        words = _count_words(text)
+        dur_s = len(pcm) / TARGET_WIDTH / TARGET_RATE
+        wps = words / dur_s if dur_s > 0 else 0
+        wps_list.append(wps)
+
+    sorted_wps = sorted(wps_list)
+    mid = len(sorted_wps) // 2
+    target_wps = sorted_wps[mid]
+
+    if target_wps <= 0:
+        return list(dialogue_pcms)
+
+    print(
+        f"[multi_mixer] WPS per line: {[round(w, 1) for w in wps_list]}, "
+        f"target={target_wps:.1f}",
+        flush=True,
+    )
+
+    result: list[bytes] = []
+    for pcm, wps in zip(dialogue_pcms, wps_list):
+        ratio = wps / target_wps if target_wps > 0 else 1.0
+        if abs(ratio - 1.0) > 0.15:
+            factor = 1.0 / ratio
+            pcm = _adjust_line_tempo(pcm, factor)
+        result.append(pcm)
+
+    return result
+
+
 def _concat_dialogues(dialogue_pcms: list[bytes], gap_ms: int) -> bytes:
     """Concatenate dialogue PCMs with silence gaps, normalizing each line."""
     parts: list[bytes] = []
@@ -166,10 +247,15 @@ async def mix_multi_dialogue(
     total_duration_ms: int,
     gap_ms: int = 800,
     speed: float = 1.0,
+    dialogue_texts: list[str] | None = None,
 ) -> AsyncIterator[bytes]:
     loop = asyncio.get_running_loop()
     has_sfx = sfx_pcm is not None and len(sfx_pcm) > 0
     n_dialogue = len(dialogue_pcms)
+
+    # Normalize speech rates before concatenation
+    if dialogue_texts and len(dialogue_texts) == n_dialogue:
+        dialogue_pcms = _normalize_speech_rates(dialogue_pcms, dialogue_texts)
 
     # Combine all dialogues + silence gaps into one contiguous PCM buffer
     combined_vocal = _concat_dialogues(dialogue_pcms, gap_ms)

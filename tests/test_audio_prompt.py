@@ -108,8 +108,9 @@ async def test_dispatch_from_prompt_mocked(monkeypatch):
     monkeypatch.setattr("services.mixer.orchestrator._collect_sfx_pcm", mock_sfx)
     prompt = 'Dialogue: A: "Hello." | B: "Hi."'
     async with httpx.AsyncClient() as client:
-        pcms, sfx, total = await dispatch_from_prompt(client, prompt)
+        pcms, sfx, total, texts = await dispatch_from_prompt(client, prompt)
     assert len(pcms) == 2
+    assert len(texts) == 2
     assert total > 0
 
 
