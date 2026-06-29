@@ -17,7 +17,8 @@
 set -e
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # repo root
 echo "==> OS deps"
-sudo apt-get update -qq && sudo apt-get install -y -qq python3.10-venv ffmpeg openssl
+SUDO=$(command -v sudo >/dev/null 2>&1 && echo sudo || echo "")
+$SUDO apt-get update -qq && $SUDO apt-get install -y -qq python3.10-venv ffmpeg openssl
 
 echo "==> Supabase private CA (extract from the pooler; their docs' verify-ca method)"
 openssl s_client -starttls postgres -connect aws-1-us-east-1.pooler.supabase.com:5432 -showcerts \

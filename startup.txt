@@ -1,0 +1,81 @@
+Startup guide
+
+What this setup is doing
+
+This project has three distinct runtime pieces:
+
+1. Backend service
+   - Runs the API layer and talks to Supabase plus Claude.
+   - Starts on port 8080.
+
+2. Fast renderer
+   - Uses the 1.3B model for the quicker, lower-quality path.
+   - This is the path that is closer to the real-time / streaming experience.
+   - Starts on port 8004.
+
+3. Quality render test
+   - Uses the 5B model for a higher-quality one-shot clip.
+   - This is slower and is mainly for judging the quality jump.
+
+4. Frontend UI
+   - Runs locally on your laptop with Vite.
+   - Talks to the remote backend over the SSH tunnel.
+
+Important setup note
+
+Use tmux on the VM. The VM kills background processes when you disconnect, so plain shells will die.
+
+Remote VM: one SSH session, inside tmux
+
+ssh -i private_key.pem ubuntu@216.81.248.187
+tmux new -s sb
+cd ~/shotbook
+
+# Window 1: backend
+PYTHONPATH=. .venv-api/bin/uvicorn app.main:app --host 0.0.0.0 --port 8080
+
+# Window 2: fast renderer
+CUDA_VISIBLE_DEVICES=0 .venv-renderer/bin/uvicorn services.renderer.main:app --host 0.0.0.0 --port 8004
+
+# Window 3: quality render test
+CUDA_VISIBLE_DEVICES=0 .venv-quality/bin/python quality_render.py \
+  --prompt "Extreme close-up, a thin pale hand slowly easing a heavy wooden bedroom door open inch by inch in near-darkness, faint warm lantern light leaking through the gap, an old Victorian bedchamber, tense and silent, photorealistic cinematic film still, 35mm, dramatic chiaroscuro lighting, highly detailed, film grain" \
+  --out test5b.mp4 --frames 81 --steps 40
+
+Local laptop: two terminals
+
+Terminal A: tunnel the backend
+ssh -i private_key.pem -N -L 8080:localhost:8080 ubuntu@216.81.248.187
+
+Terminal B: run the frontend UI
+cd frontend && npm run dev
+# then open http://localhost:5173
+
+Optional: download a generated clip
+scp -i private_key.pem ubuntu@216.81.248.187:/home/ubuntu/shotbook/test5b.mp4 .
+
+How many shells do we need?
+
+Minimum practical setup:
+
+- 1 remote SSH shell on the VM
+- 3 tmux windows inside that SSH session
+  - backend
+  - fast renderer
+  - quality test
+- 2 local shells on your laptop
+  - SSH tunnel
+  - frontend dev server
+
+So the short version is:
+- 3 remote processes
+- 2 local processes
+- 1 tmux session to keep them alive
+
+What the architecture decision means
+
+The fast 1.3B path and the 5B quality path are different systems.
+
+- The 1.3B renderer is the streaming-style path and can support prompt injection while frames are being generated.
+- The 5B model is a higher-quality one-shot render and is not the same runtime path.
+- The real "both" solution would be a larger streaming model, which is the next direction to evaluate.
