@@ -69,13 +69,15 @@ class QualityEngine:
         logger.info("quality model loaded in %.1fs", time.time() - t0)
 
     def _render_shot(self, prompt: str, seconds: float, out_path: Path,
-                     negative_prompt: str | None) -> int:
+                     negative_prompt: str | None, steps: int | None = None,
+                     guidance: float | None = None) -> int:
         nframes = _frames_for(seconds)
         g = torch.Generator(device="cuda").manual_seed(self.seed)
         frames = self._pipe(
             prompt=prompt, negative_prompt=negative_prompt or NEG,
             height=self.height, width=self.width, num_frames=nframes,
-            num_inference_steps=self.steps, guidance_scale=self.guidance,
+            num_inference_steps=steps or self.steps,
+            guidance_scale=self.guidance if guidance is None else guidance,
             generator=g,
         ).frames[0]
         export_to_video(frames, str(out_path), fps=FPS)
@@ -83,7 +85,8 @@ class QualityEngine:
 
     def render_plan(self, shots: list[dict], out_dir: str,
                     seconds_per_shot: float = DEFAULT_SECONDS_PER_SHOT,
-                    negative_prompt: str | None = None) -> tuple[Path, int]:
+                    negative_prompt: str | None = None,
+                    steps: int | None = None, guidance: float | None = None) -> tuple[Path, int]:
         """Render every shot at 720p, stitch into final_story.mp4."""
         if not shots:
             raise ValueError("render_plan requires at least one shot")
@@ -98,7 +101,7 @@ class QualityEngine:
                 raise ValueError(f"shot {i} has no prompt")
             slug = (shot.get("shot_id") or f"{i + 1:02d}").replace(" ", "_")
             shot_path = out / f"shot_{i:02d}_{slug}.mp4"
-            n = self._render_shot(prompt, seconds_per_shot, shot_path, negative_prompt)
+            n = self._render_shot(prompt, seconds_per_shot, shot_path, negative_prompt, steps, guidance)
             total_frames += n
             shot_files.append(shot_path)
             logger.info("HD shot %d/%d %r: %d frames -> %s",

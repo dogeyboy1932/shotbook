@@ -29,6 +29,11 @@ class RenderRequest(BaseModel):
     # Accepted for forward-compat; the distilled streaming model does not currently
     # consume a CFG negative prompt (the look/negatives are baked into the prompt).
     negative_prompt: str | None = None
+    # Optional overrides honored by the 5B HD renderer only (the fast streaming
+    # renderer ignores them): fewer denoise steps = faster; lower guidance can
+    # also speed things up. None -> use the engine defaults.
+    steps: int | None = None
+    guidance: float | None = None
 
 
 class RenderResponse(BaseModel):

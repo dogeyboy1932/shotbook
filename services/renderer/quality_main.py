@@ -59,7 +59,8 @@ async def render(req: RenderRequest) -> RenderResponse:
     async with _render_lock:
         try:
             final, total_frames = await asyncio.to_thread(
-                engine.render_plan, shots, req.out_dir, req.seconds_per_shot, req.negative_prompt
+                engine.render_plan, shots, req.out_dir, req.seconds_per_shot,
+                req.negative_prompt, req.steps, req.guidance
             )
         except Exception as exc:
             logger.exception("HD render failed")
