@@ -117,6 +117,13 @@ export interface GenerateVideoResponse {
   scene: ComposedScene
 }
 
+export interface VideoJob {
+  job_id: string
+  status: 'pending' | 'running' | 'done' | 'failed'
+  video_url: string | null
+  error: string | null
+}
+
 export const api = {
   listBooks: () => request<BookSummary[]>('/api/books'),
 
@@ -140,4 +147,6 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ paragraph_ids: paragraphIds }),
     }),
+
+  getVideoJob: (jobId: string) => request<VideoJob>(`/api/video-jobs/${jobId}`),
 }

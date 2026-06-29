@@ -24,10 +24,10 @@ export default function Reader() {
 
   const [composedScene, setComposedScene] = useState<ComposedScene | null>(null)
   const [composing, setComposing] = useState(false)
-  // Fire-and-forget: the backend renders the video in the background and saves
-  // it to disk (generated_videos/video_<timestamp>.mp4). The UI just records
-  // that it was kicked off -- no polling.
-  const [videoSubmitted, setVideoSubmitted] = useState(false)
+  // The backend renders server-side; we poll the job and play the stitched mp4
+  // (streamed from /api/video-jobs/{id}/video) once it's ready.
+  const [videoUrl, setVideoUrl] = useState<string | null>(null)
+  const [videoStatus, setVideoStatus] = useState<string | null>(null)
 
   const [pageIndex, setPageIndex] = useState(0)
 
@@ -62,7 +62,8 @@ export default function Reader() {
     setContexts([])
     setQueryError(null)
     setComposedScene(null)
-    setVideoSubmitted(false)
+    setVideoUrl(null)
+    setVideoStatus(null)
   }, [])
 
   const goToPage = useCallback(
@@ -129,12 +130,29 @@ export default function Reader() {
   const handleCompose = useCallback(async () => {
     if (selectedParagraphIds.length === 0) return
     setComposing(true)
-    setVideoSubmitted(false)
+    setVideoUrl(null)
+    setVideoStatus(null)
     try {
-      const { scene } = await api.generateVideo(selectedParagraphIds)
+      const { scene, job_id } = await api.generateVideo(selectedParagraphIds)
       setComposedScene(scene)
-      // Request accepted; rendering happens server-side and is saved to disk.
-      setVideoSubmitted(true)
+      setVideoStatus('rendering')
+      // Poll the render job until the stitched mp4 is ready, then play it.
+      const poll = async () => {
+        try {
+          const job = await api.getVideoJob(job_id)
+          setVideoStatus(job.status)
+          if (job.status === 'done' && job.video_url) {
+            setVideoUrl(job.video_url)
+          } else if (job.status === 'failed') {
+            setQueryError(job.error || 'Video render failed')
+          } else {
+            setTimeout(poll, 3000)
+          }
+        } catch (err) {
+          setQueryError(String(err))
+        }
+      }
+      setTimeout(poll, 2000)
     } catch (err) {
       setQueryError(String(err))
     } finally {
@@ -231,7 +249,8 @@ export default function Reader() {
             error={queryError}
             onCompose={handleCompose}
             composing={composing}
-            videoSubmitted={videoSubmitted}
+            videoUrl={videoUrl}
+            videoStatus={videoStatus}
           />
         </div>
       </div>

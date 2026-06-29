@@ -19,6 +19,7 @@ driven by each shot's `continuity` field.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -36,6 +37,11 @@ VENDOR_DIR = Path(__file__).resolve().parent / "vendor"
 FPS = 16                     # pixel-frame rate of the model's output
 LATENT_FPS = 4               # 1 latent frame -> 4 pixel frames (Wan VAE 4x temporal)
 DEFAULT_SECONDS_PER_SHOT = 5.0
+
+# Motion-smoothing post-process: interpolate the 16fps model output up to this fps
+# with ffmpeg's motion-compensated interpolation -- the biggest cheap win for
+# "more realistic animation". No extra deps, no API cost. 0 disables.
+INTERP_FPS = int(os.getenv("RENDER_INTERP_FPS", "32"))
 
 
 class RenderEngine:
@@ -108,8 +114,15 @@ class RenderEngine:
             shot_path = out / f"shot_{i:02d}_{slug}.mp4"
             n = self._render_shot(prompt, seconds_per_shot, shot_path)
             total_frames += n
-            logger.info("shot %d/%d %r: %d frames -> %s", i + 1, len(shots), slug, n, shot_path.name)
-            shot_files.append(shot_path)
+            # Smooth the motion per-shot (before stitching, so cuts aren't interpolated across).
+            if INTERP_FPS:
+                smooth = out / f"shot_{i:02d}_{slug}_smooth.mp4"
+                _interpolate(shot_path, smooth, INTERP_FPS)
+                shot_files.append(smooth)
+            else:
+                shot_files.append(shot_path)
+            logger.info("shot %d/%d %r: %d frames%s -> %s", i + 1, len(shots), slug, n,
+                        f" (interp->{INTERP_FPS}fps)" if INTERP_FPS else "", shot_path.name)
 
         final = out / "final_story.mp4"
         if len(shot_files) == 1:
@@ -134,3 +147,15 @@ def _ffmpeg_concat(clips: list[Path], final: Path) -> None:
         str(final),
     ]
     subprocess.run(cmd, check=True, capture_output=True)
+
+
+def _interpolate(src: Path, dst: Path, fps: int) -> None:
+    """Motion-compensated frame interpolation up to `fps` -- smooths the choppy
+    16fps output into more fluid motion. ffmpeg-native (no extra deps)."""
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    vf = f"minterpolate=fps={fps}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1"
+    subprocess.run(
+        [ffmpeg, "-y", "-i", str(src), "-vf", vf,
+         "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(dst)],
+        check=True, capture_output=True,
+    )

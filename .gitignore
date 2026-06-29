@@ -1,16 +1,23 @@
 # --- Python Virtual Environments ---
 .venv/
 .venv-renderer/
+.venv-api/
+.venv-quality/
 venv/
 env/
 ENV/
 
-# --- Renderer model weights (downloaded on the VM, NOT committed) ---
+# --- Model weights (downloaded on the VM via resume_vm.sh, NOT committed) ---
 services/renderer/vendor/wan_models/
 services/renderer/vendor/checkpoints/
 services/renderer/vendor/out/
+wan_models/
 *.pt
 *.pth
+*.safetensors
+
+# --- Rendered video outputs ---
+*.mp4
 
 # --- Python Caching & Bytecode ---
 __pycache__/

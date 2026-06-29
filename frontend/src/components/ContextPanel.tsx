@@ -7,7 +7,8 @@ interface ContextPanelProps {
   error: string | null
   onCompose: () => void
   composing: boolean
-  videoSubmitted: boolean
+  videoUrl: string | null
+  videoStatus: string | null
 }
 
 export default function ContextPanel({
@@ -17,7 +18,8 @@ export default function ContextPanel({
   error,
   onCompose,
   composing,
-  videoSubmitted,
+  videoUrl,
+  videoStatus,
 }: ContextPanelProps) {
   if (loading) {
     return <p className="text-sm text-slate-400">Querying state for the selected text...</p>
@@ -167,18 +169,26 @@ export default function ContextPanel({
         </div>
       )}
 
-      {videoSubmitted && (
-        <div className="rounded-lg border border-emerald-400/40 bg-emerald-400/10 p-3 text-sm">
-          <p className="font-medium text-emerald-300">
-            Video generation started.
-          </p>
+      {videoUrl ? (
+        <div className="space-y-2 rounded-lg border border-emerald-400/40 bg-emerald-400/10 p-3 text-sm">
+          <p className="font-medium text-emerald-300">Generated video</p>
+          <video
+            src={videoUrl}
+            controls
+            autoPlay
+            loop
+            className="w-full rounded-lg border border-slate-700 bg-black"
+          />
+        </div>
+      ) : videoStatus && videoStatus !== 'done' ? (
+        <div className="rounded-lg border border-amber-400/40 bg-amber-400/10 p-3 text-sm">
+          <p className="font-medium text-amber-300">Rendering on the GPU…</p>
           <p className="mt-1 text-slate-400">
-            Rendering runs on the server (~40 min) and the finished clip is saved to{' '}
-            <span className="font-mono text-slate-300">generated_videos/video_&lt;timestamp&gt;.mp4</span>.
-            You can close this — no need to wait here.
+            Generating the shots and stitching them — usually well under a minute. Status:{' '}
+            <span className="font-mono text-slate-300">{videoStatus}</span>
           </p>
         </div>
-      )}
+      ) : null}
     </div>
   )
 }

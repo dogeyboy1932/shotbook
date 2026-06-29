@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/book_video_gen"
     db_pool_size: int = 20
     db_max_overflow: int = 10
+    # Optional path to a CA cert PEM used to verify the database's TLS -- e.g.
+    # Supabase's private "Supabase Root 2021 CA". When set, the async engine
+    # connects with a fully-verified SSL context. Unset = no SSL (local dev).
+    db_ssl_ca: str | None = None
 
     # --- vLLM cluster (8x H100, one OpenAI-compatible server per GPU) ---
     # Each entry is the base URL of an independent vLLM server instance.
