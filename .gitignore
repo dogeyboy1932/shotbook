@@ -42,6 +42,10 @@ frontend/dist/
 outputs/
 logs/
 
+# --- Runtime video outputs (regenerated at request time; not source) ---
+generated_videos/
+video_jobs/
+
 # --- IDEs and Editor Configs ---
 .vscode/
 .idea/
