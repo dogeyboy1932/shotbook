@@ -132,6 +132,46 @@ class RenderEngine:
         logger.info("stitched %d shot(s) -> %s", len(shot_files), final)
         return final, total_frames
 
+    def stream_plan(self, shots: list[dict], out_dir: str,
+                    seconds_per_shot: float = DEFAULT_SECONDS_PER_SHOT):
+        """Generator: yield each decoded pixel frame (uint8 HxWx3 RGB) live as it
+        is produced across all shots, then write final_story.mp4 so the finished
+        clip is still saved.
+
+        This is the "frames as they generate" path. The streaming model produces
+        frames chunk-by-chunk from a single prompt per shot (see PLAN.md), so the
+        caller can push each frame to the browser the moment it exists instead of
+        waiting for the whole render + stitch.
+        """
+        if not shots:
+            raise ValueError("stream_plan requires at least one shot")
+        out = Path(out_dir).resolve()
+        out.mkdir(parents=True, exist_ok=True)
+
+        all_frames: list[np.ndarray] = []
+        for i, shot in enumerate(shots):
+            prompt = shot.get("prompt")
+            if not prompt:
+                raise ValueError(f"shot {i} has no prompt")
+            gen = self._StreamingCF(self._pipe, seed=self.seed, window=self.window, sink=self.sink)
+            total = max(gen.nfpb, int(round(seconds_per_shot * LATENT_FPS)))
+            total -= total % gen.nfpb
+            gen.start(prompt, total_frames=total)
+            self._pipe.vae.model.clear_cache()
+            for _ in range(total // gen.nfpb):
+                den = gen.step()                 # DiT denoise -> clean latents
+                chunk = gen.decode_chunk(den)    # VAE decode -> uint8 [nf,H,W,3]
+                for frame in chunk:
+                    all_frames.append(frame)
+                    yield frame
+            logger.info("streamed shot %d/%d (%d frames so far)", i + 1, len(shots), len(all_frames))
+
+        if all_frames:
+            final = out / "final_story.mp4"
+            imageio.mimwrite(str(final), np.stack(all_frames), fps=FPS,
+                             codec="libx264", macro_block_size=1)
+            logger.info("saved streamed render -> %s (%d frames)", final, len(all_frames))
+
 
 def _ffmpeg_concat(clips: list[Path], final: Path) -> None:
     """Concat clips into one continuous mp4 (same approach as generate_video.py)."""

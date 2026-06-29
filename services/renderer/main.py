@@ -15,10 +15,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
 import time
 from contextlib import asynccontextmanager
 
+import cv2
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 
 from services.renderer.renderer import RenderEngine
 from services.renderer.schema import RenderRequest, RenderResponse
@@ -31,6 +34,9 @@ engine = RenderEngine(model=os.getenv("RENDERER_MODEL", "chunkwise"))
 # Single GPU, single model instance -> serialize renders so two requests never
 # stomp on the same KV/VAE caches or contend for VRAM.
 _render_lock = asyncio.Lock()
+# The live MJPEG endpoint runs in a worker thread (sync generator), so it needs
+# a plain threading lock rather than the asyncio one above.
+_stream_lock = threading.Lock()
 
 
 @asynccontextmanager
@@ -72,6 +78,38 @@ async def render(req: RenderRequest) -> RenderResponse:
         shot_count=len(shots),
         total_frames=total_frames,
         seconds=round(time.time() - t0, 1),
+    )
+
+
+@app.post("/render/stream")
+def render_stream(req: RenderRequest) -> StreamingResponse:
+    """Live MJPEG: stream each frame as the model produces it (multipart/
+    x-mixed-replace), so the browser can display frames as they generate. The
+    finished mp4 is still written to req.out_dir by stream_plan.
+
+    Sync endpoint on purpose -- FastAPI runs it in a worker thread, and the
+    StreamingResponse drives the sync generator there, so the blocking
+    GPU/encode loop never touches the event loop.
+    """
+    if not req.shots:
+        raise HTTPException(status_code=422, detail="shots must not be empty")
+    if not engine.is_loaded:
+        raise HTTPException(status_code=503, detail="model not loaded yet")
+    shots = [s.model_dump() for s in req.shots]
+
+    def frames():
+        with _stream_lock:  # one render at a time on the single GPU
+            for frame in engine.stream_plan(shots, req.out_dir, req.seconds_per_shot):
+                bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                ok, jpg = cv2.imencode(".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+                if not ok:
+                    continue
+                buf = jpg.tobytes()
+                yield (b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
+                       + str(len(buf)).encode() + b"\r\n\r\n" + buf + b"\r\n")
+
+    return StreamingResponse(
+        frames(), media_type="multipart/x-mixed-replace; boundary=frame"
     )
 
 
