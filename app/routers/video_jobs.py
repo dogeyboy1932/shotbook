@@ -1,25 +1,30 @@
 """Video generation job runner.
 
-POST /api/generate-video  -- compose the scene + launch generate_video.py in a
-                             background thread; returns immediately with a job_id.
+POST /api/generate-video  -- compose the scene + dispatch the planned shots to the
+                             renderer service in a background thread; returns a job_id.
 GET  /api/video-jobs/{job_id} -- poll status: pending | running | done | failed
 GET  /api/video-jobs/{job_id}/video -- stream the finished mp4
+
+Rendering itself is delegated to the warm renderer microservice
+(services/renderer, default http://localhost:8004) -- a persistent process that
+keeps the Wan2.1-1.3B streaming model in GPU memory, so each job pays no
+model-load cost. This replaced the old approach of subprocess-spawning a
+cold-loading generate_video.py per job.
 """
 from __future__ import annotations
 
-import json
 import shutil
-import subprocess
-import sys
 import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.context_compiler import compile_contexts
 from app.db import get_db_session
 from app.scene_composer import compose_scene
@@ -32,37 +37,43 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 JOBS_DIR = PROJECT_ROOT / "video_jobs"
 JOBS_DIR.mkdir(exist_ok=True)
 
-GENERATE_SCRIPT = PROJECT_ROOT / "generate_video.py"
-
 # Finished videos are copied here, named by timestamp, so they can be grabbed
 # off disk directly -- no need for the UI to stream them back.
 OUTPUT_DIR = PROJECT_ROOT / "generated_videos"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
+# Generous: a multi-shot scene streams several clips back-to-back on one GPU.
+_RENDER_TIMEOUT_S = 1800.0
+
 _jobs: dict[str, dict] = {}
 
 
 def _run(job_id: str, plan: dict, job_dir: Path) -> None:
+    """Hand the planned shots to the renderer service and record the result.
+
+    The renderer shares this VM's filesystem, so it writes final_story.mp4 into
+    `job_dir` directly; we just copy it into generated_videos/ on success.
+    """
     _jobs[job_id]["status"] = "running"
-    plan_path = job_dir / "plan.json"
-    plan_path.write_text(json.dumps(plan))
+    payload = {
+        "shots": plan["shots"],
+        "out_dir": str(job_dir),
+        "seconds_per_shot": settings.render_seconds_per_shot,
+        "negative_prompt": plan.get("negative_prompt"),
+    }
 
-    result = subprocess.run(
-        # sys.executable, not bare "python" -- guarantees the subprocess runs
-        # in the same venv as the API server (which has torch/diffusers/imageio
-        # installed). Bare "python" resolves to system python, which doesn't.
-        [sys.executable, str(GENERATE_SCRIPT), str(plan_path)],
-        cwd=str(job_dir),
-        capture_output=True,
-        text=True,
-    )
-
-    if result.returncode != 0:
+    try:
+        response = httpx.post(
+            f"{settings.renderer_url}/render", json=payload, timeout=_RENDER_TIMEOUT_S
+        )
+        response.raise_for_status()
+        result = response.json()
+    except Exception as exc:  # connection refused, timeout, 5xx from renderer, etc.
         _jobs[job_id]["status"] = "failed"
-        _jobs[job_id]["error"] = result.stderr[-3000:]
+        _jobs[job_id]["error"] = f"renderer call failed: {exc}"[-3000:]
         return
 
-    final = job_dir / "final_story.mp4"
+    final = Path(result.get("video_path") or (job_dir / "final_story.mp4"))
     if final.exists():
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         saved = OUTPUT_DIR / f"video_{timestamp}.mp4"
@@ -72,7 +83,7 @@ def _run(job_id: str, plan: dict, job_dir: Path) -> None:
         _jobs[job_id]["video_path"] = str(saved)
     else:
         _jobs[job_id]["status"] = "failed"
-        _jobs[job_id]["error"] = "generate_video.py exited 0 but final_story.mp4 was not produced"
+        _jobs[job_id]["error"] = "renderer returned ok but final_story.mp4 was not found"
 
 
 @router.post("/generate-video")

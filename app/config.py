@@ -64,5 +64,14 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = Field(default=None, validation_alias="ANTHROPIC_API_KEY")
     claude_video_model: str = "claude-opus-4-8"
 
+    # --- Renderer service (services/renderer) ------------------------------
+    # The fast streaming video renderer (Wan2.1-1.3B / Causal-Forcing) runs as a
+    # separate warm microservice in its own venv. video_jobs.py POSTs the planned
+    # shots here instead of cold-loading a model per request. Override via
+    # BVG_RENDERER_URL.
+    renderer_url: str = "http://localhost:8004"
+    # Seconds of video per planned shot (each rendered as one streamed clip).
+    render_seconds_per_shot: float = 5.0
+
 
 settings = Settings()
