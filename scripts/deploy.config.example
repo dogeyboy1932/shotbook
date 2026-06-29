@@ -1,0 +1,17 @@
+# ShotBook deploy config -- copy to scripts/deploy.config and fill in.
+# scripts/deploy.config is gitignored (it holds secrets); this .example is not.
+#
+# Set these ONCE. The only thing that changes per instance is the IP, which you
+# pass on the command line:  scripts/deploy.sh <VM_IP>
+
+# --- SSH (the private key path is usually all you need to change) ---
+VM_SSH_KEY="/absolute/path/to/private_key.pem"
+VM_USER=root          # 'root' or 'ubuntu', depending on the image
+VM_PORT=22
+
+# --- secrets shipped into the VM's .env ---
+BVG_DATABASE_URL=postgresql+asyncpg://postgres.<ref>:<password>@aws-1-us-east-1.pooler.supabase.com:5432/postgres
+ANTHROPIC_API_KEY=sk-ant-...
+
+# --- optional ---
+LOCAL_BACKEND_PORT=8080   # local port the tunnel binds for the backend
