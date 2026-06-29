@@ -77,5 +77,13 @@ class Settings(BaseSettings):
     # Seconds of video per planned shot (each rendered as one streamed clip).
     render_seconds_per_shot: float = 5.0
 
+    # --- Quality renderer (the HD half of the hybrid) ----------------------
+    # The cinematic 5B renderer (Wan2.2-TI2V-5B) runs as a second warm
+    # microservice on its own port/venv. Jobs with quality=true route here
+    # instead of the fast 1.3B renderer. Override via BVG_QUALITY_RENDERER_URL.
+    quality_renderer_url: str = "http://localhost:8005"
+    # HD shots are ~2 min each, so keep them to the 5B model's ~5s sweet spot.
+    quality_seconds_per_shot: float = 5.0
+
 
 settings = Settings()

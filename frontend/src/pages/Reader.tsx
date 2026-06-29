@@ -127,13 +127,13 @@ export default function Reader() {
     }
   }, [selectedParagraphIds])
 
-  const handleCompose = useCallback(async () => {
+  const handleCompose = useCallback(async (quality: boolean) => {
     if (selectedParagraphIds.length === 0) return
     setComposing(true)
     setVideoUrl(null)
     setVideoStatus(null)
     try {
-      const { scene, job_id } = await api.generateVideo(selectedParagraphIds)
+      const { scene, job_id } = await api.generateVideo(selectedParagraphIds, quality)
       setComposedScene(scene)
       setVideoStatus('rendering')
       // Poll the render job until the stitched mp4 is ready, then play it.

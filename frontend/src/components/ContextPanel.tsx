@@ -5,7 +5,7 @@ interface ContextPanelProps {
   composedScene: ComposedScene | null
   loading: boolean
   error: string | null
-  onCompose: () => void
+  onCompose: (quality: boolean) => void
   composing: boolean
   videoUrl: string | null
   videoStatus: string | null
@@ -47,13 +47,24 @@ export default function ContextPanel({
         <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-400">
           Resolved state ({contexts.length} paragraph{contexts.length > 1 ? 's' : ''})
         </h3>
-        <button
-          onClick={onCompose}
-          disabled={composing}
-          className="rounded-lg bg-amber-400 px-4 py-1.5 text-sm font-medium text-slate-900 transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {composing ? 'Planning shots...' : 'Generate Video'}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => onCompose(false)}
+            disabled={composing}
+            title="Fast 1.3B streaming preview (~seconds)"
+            className="rounded-lg bg-amber-400 px-4 py-1.5 text-sm font-medium text-slate-900 transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {composing ? 'Planning shots...' : 'Generate (Fast)'}
+          </button>
+          <button
+            onClick={() => onCompose(true)}
+            disabled={composing}
+            title="Cinematic 5B render at 720p (~2 min/shot)"
+            className="rounded-lg bg-violet-500 px-4 py-1.5 text-sm font-medium text-white transition hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Render in HD
+          </button>
+        </div>
       </div>
 
       <div className="max-h-[28rem] space-y-3 overflow-y-auto pr-1">

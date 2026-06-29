@@ -142,10 +142,10 @@ export const api = {
       body: JSON.stringify({ paragraph_ids: paragraphIds }),
     }),
 
-  generateVideo: (paragraphIds: number[]) =>
+  generateVideo: (paragraphIds: number[], quality = false) =>
     request<GenerateVideoResponse>('/api/generate-video', {
       method: 'POST',
-      body: JSON.stringify({ paragraph_ids: paragraphIds }),
+      body: JSON.stringify({ paragraph_ids: paragraphIds, quality }),
     }),
 
   getVideoJob: (jobId: string) => request<VideoJob>(`/api/video-jobs/${jobId}`),

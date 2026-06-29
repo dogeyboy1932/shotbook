@@ -48,23 +48,29 @@ _RENDER_TIMEOUT_S = 1800.0
 _jobs: dict[str, dict] = {}
 
 
-def _run(job_id: str, plan: dict, job_dir: Path) -> None:
+def _run(job_id: str, plan: dict, job_dir: Path, quality: bool = False) -> None:
     """Hand the planned shots to the renderer service and record the result.
 
-    The renderer shares this VM's filesystem, so it writes final_story.mp4 into
-    `job_dir` directly; we just copy it into generated_videos/ on success.
+    Routes to the cinematic 5B renderer when `quality` is set, otherwise the
+    fast 1.3B streaming renderer. The chosen renderer shares this VM's
+    filesystem, so it writes final_story.mp4 into `job_dir` directly; we just
+    copy it into generated_videos/ on success.
     """
     _jobs[job_id]["status"] = "running"
+    renderer_url = settings.quality_renderer_url if quality else settings.renderer_url
+    seconds_per_shot = (
+        settings.quality_seconds_per_shot if quality else settings.render_seconds_per_shot
+    )
     payload = {
         "shots": plan["shots"],
         "out_dir": str(job_dir),
-        "seconds_per_shot": settings.render_seconds_per_shot,
+        "seconds_per_shot": seconds_per_shot,
         "negative_prompt": plan.get("negative_prompt"),
     }
 
     try:
         response = httpx.post(
-            f"{settings.renderer_url}/render", json=payload, timeout=_RENDER_TIMEOUT_S
+            f"{renderer_url}/render", json=payload, timeout=_RENDER_TIMEOUT_S
         )
         response.raise_for_status()
         result = response.json()
@@ -113,7 +119,9 @@ async def generate_video(
     _jobs[job_id] = {"status": "pending", "video_path": None, "error": None}
 
     plan_dict = video_plan.model_dump()
-    threading.Thread(target=_run, args=(job_id, plan_dict, job_dir), daemon=True).start()
+    threading.Thread(
+        target=_run, args=(job_id, plan_dict, job_dir, request.quality), daemon=True
+    ).start()
 
     return {"job_id": job_id, "scene": scene.model_dump()}
 

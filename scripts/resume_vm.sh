@@ -52,7 +52,9 @@ deactivate
 echo "==> [3/3] quality 5B venv (.venv-quality, newer diffusers) + weights"
 python3 -m venv .venv-quality && . .venv-quality/bin/activate && pip install -q -U pip
 pip install -q torch==2.5.1 torchvision==0.20.1 $PT
-pip install -q -U diffusers transformers accelerate ftfy imageio imageio-ffmpeg "numpy<2" safetensors sentencepiece
+# fastapi/uvicorn so the 5B can run as the warm HD renderer service (port 8005).
+pip install -q -U diffusers transformers accelerate ftfy imageio imageio-ffmpeg "numpy<2" \
+  safetensors sentencepiece "fastapi>=0.111" "uvicorn[standard]>=0.29"
 python - <<'PY'
 from huggingface_hub import snapshot_download
 snapshot_download("Wan-AI/Wan2.2-TI2V-5B-Diffusers",
@@ -65,7 +67,8 @@ echo "==> RESUME COMPLETE. Make sure ~/shotbook/.env exists with:"
 echo "      BVG_DATABASE_URL=postgresql+asyncpg://postgres.<ref>:<pw>@aws-1-us-east-1.pooler.supabase.com:5432/postgres"
 echo "      BVG_DB_SSL_CA=$HOME/supabase_ca.pem"
 echo "      ANTHROPIC_API_KEY=sk-ant-..."
-echo "  Then start services in tmux:"
+echo "  Then start the three services in tmux (backend + fast 1.3B + HD 5B):"
 echo "      tmux new -s sb"
 echo "      PYTHONPATH=. .venv-api/bin/uvicorn app.main:app --host 0.0.0.0 --port 8080"
 echo "      CUDA_VISIBLE_DEVICES=0 .venv-renderer/bin/uvicorn services.renderer.main:app --host 0.0.0.0 --port 8004"
+echo "      CUDA_VISIBLE_DEVICES=0 .venv-quality/bin/uvicorn services.renderer.quality_main:app --host 0.0.0.0 --port 8005"

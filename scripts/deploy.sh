@@ -102,19 +102,22 @@ else
 fi
 REMOTE
 
-say "4/6 starting backend :8080 + renderer :8004 (tmux 'sb')"
+say "4/6 starting backend :8080 + fast renderer :8004 + HD 5B :8005 (tmux 'sb')"
 "${SSH[@]}" "$HOST" "bash -s" <<REMOTE
 set -e
 cd "$RDIR"
 tmux kill-session -t sb 2>/dev/null || true
 tmux new-session -d -s sb -n backend  "cd $RDIR; set -a; . ./.env; set +a; PYTHONPATH=. .venv-api/bin/uvicorn app.main:app --host 0.0.0.0 --port 8080 > ~/backend.log 2>&1"
 tmux new-window  -t sb -n renderer "cd $RDIR; CUDA_VISIBLE_DEVICES=0 .venv-renderer/bin/uvicorn services.renderer.main:app --host 0.0.0.0 --port 8004 > ~/renderer.log 2>&1"
-printf "   waiting for renderer to warm-load model"
-for i in \$(seq 1 60); do
-  if curl -s -m5 http://localhost:8004/health 2>/dev/null | grep -q '"loaded":true'; then echo " ready"; break; fi
-  printf "."; sleep 5
+tmux new-window  -t sb -n quality  "cd $RDIR; CUDA_VISIBLE_DEVICES=0 .venv-quality/bin/uvicorn services.renderer.quality_main:app --host 0.0.0.0 --port 8005 > ~/quality.log 2>&1"
+for svc in "fast 1.3B renderer:8004" "HD 5B renderer:8005"; do
+  name=\${svc%:*}; port=\${svc##*:}
+  printf "   waiting for %s to warm-load" "\$name"
+  for i in \$(seq 1 90); do
+    if curl -s -m5 http://localhost:\$port/health 2>/dev/null | grep -q '"loaded":true'; then echo " ready"; break; fi
+    printf "."; sleep 5
+  done
 done
-curl -s -m8 http://localhost:8004/health; echo
 echo -n "   backend books API: "; curl -s -m15 http://localhost:8080/api/books | head -c 120; echo
 REMOTE
 
