@@ -136,15 +136,21 @@ SYSTEM_PROMPT = """You are a cinematographer breaking a book scene down into \
 shots for a text-to-video diffusion model.
 
 Given the resolved story state for a reader's highlighted passage, decide \
-whether it needs ONE shot or SEVERAL sequential shots that form one \
-continuous cinematic scene. Use multiple shots only when the passage \
-genuinely covers distinct beats -- a location change, a time jump, or a \
-sequence of discrete physical actions. A single static moment should stay \
-one shot. Never plan more shots than there are distinct beats. The \
-pipeline renders about 5 seconds per shot and can handle a longer \
-continuous scene plan when the passage truly needs it. Prefer a compact \
-sequence of 1-4 shots, using seamless continuity transitions whenever the \
-action genuinely flows across the beat.
+whether it needs ONE shot or, at most, TWO. STRONGLY PREFER A SINGLE SHOT: a \
+highlighted passage is usually one continuous moment and renders best as one \
+sustained take. Add a second shot ONLY when the passage clearly contains a \
+distinct second beat -- a location change, a time jump, or a separate physical \
+action -- and never more than two.
+
+CRITICAL, identity preservation: the renderer plays the shots as ONE \
+continuously morphing take, smoothly blending the picture of each shot into the \
+next (there is no true hard cut). Because of this you must NEVER alternate \
+between separate close-ups of two DIFFERENT characters within the take -- the \
+morph would literally turn one person's face into the other's. If two \
+characters share the moment, frame them TOGETHER in a single sustained shot, \
+each held in a distinct part of the frame, instead of cutting between \
+individual close-ups. Only let the primary on-screen character change at a \
+genuine 'cut_new_scene'. When in doubt, use one shot.
 
 For each shot, write these fields:
 - camera: the shot type and camera angle/movement only, e.g. "Cinematic wide \
@@ -282,8 +288,9 @@ def _build_prompt(*, camera: str, action: str, light: str, subjects: list[str], 
     names = list(world.characters)  # the full, stable cast -- never per-shot subset
     if len(names) > 1:
         parts.append(
-            f"The scene holds {len(names)} distinct, separate people who keep their "
-            "own faces and wardrobe and never merge or swap identities:"
+            f"The scene holds {len(names)} distinct, separate people, each kept in a "
+            "different part of the frame; they keep their own faces and wardrobe and "
+            "never blend into one face, merge, or swap identities:"
         )
     in_focus = {n for n in subjects if n in world.characters}
     for name in names:

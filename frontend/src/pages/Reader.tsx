@@ -177,7 +177,7 @@ export default function Reader() {
     }
   }, [selectedParagraphIds])
 
-  const startJobPoll = useCallback((jobId: string, label: string) => {
+  const startJobPoll = useCallback((jobId: string, label: string, scene: ComposedScene | null) => {
     const poll = async () => {
       try {
         const job = await api.getVideoJob(jobId)
@@ -190,7 +190,7 @@ export default function Reader() {
           setSavedClips((prev) => {
             if (prev.some((c) => c.id === jobId)) return prev
             const next: SavedClip[] = [
-              { id: jobId, label: label || `Clip ${prev.length + 1}`, videoUrl: url, createdAt: Date.now() },
+              { id: jobId, label: label || `Clip ${prev.length + 1}`, videoUrl: url, scene, createdAt: Date.now() },
               ...prev,
             ]
             if (bookId) {
@@ -238,7 +238,7 @@ export default function Reader() {
       setComposedScene(scene)
       setStreamUrl(videoStreamUrl(job_id))
       setVideoStatus('planned')
-      startJobPoll(job_id, clipLabel(scene))
+      startJobPoll(job_id, clipLabel(scene), scene)
     } catch (err) {
       setQueryError(String(err))
     } finally {

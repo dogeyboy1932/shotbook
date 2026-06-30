@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { SavedClip } from '../api'
+import type { ComposedScene, SavedClip } from '../api'
 
 interface SavedClipsProps {
   clips: SavedClip[]
@@ -58,13 +58,61 @@ export default function SavedClips({ clips, onRemove }: SavedClipsProps) {
               </button>
             </div>
             {!isCollapsed && (
-              <div className="border-t border-red-500/30 bg-slate-950/40 p-2">
+              <div className="space-y-2 border-t border-red-500/30 bg-slate-950/40 p-2">
                 <video src={clip.videoUrl} controls loop playsInline className="w-full rounded-lg" />
+                {clip.scene && <ClipScenePreview scene={clip.scene} />}
               </div>
             )}
           </div>
         )
       })}
+    </div>
+  )
+}
+
+/** The resolved scene + shot plan for a saved clip — so a collapsed-then-reopened
+ *  tab still shows what was generated, not just the video. */
+function ClipScenePreview({ scene }: { scene: ComposedScene }) {
+  return (
+    <div className="space-y-2 rounded-lg border border-red-500/20 bg-slate-900/50 p-2 text-[13px] text-slate-300">
+      {scene.action_summary && (
+        <p className="leading-6">
+          <span className="font-medium text-slate-200">Action:</span> {scene.action_summary}
+        </p>
+      )}
+      {scene.characters.length > 0 && (
+        <div className="space-y-1">
+          {scene.characters.map((c) => (
+            <p key={c.character_id}>
+              <span className="font-medium text-slate-200">{c.name}</span>
+              {c.emotional_state && <span className="text-red-300/90"> — {c.emotional_state}</span>}
+            </p>
+          ))}
+        </div>
+      )}
+      {scene.location && (
+        <p>
+          <span className="font-medium text-slate-200">{scene.location.name}</span>
+          {scene.location.lighting_state && <span className="text-red-300/90"> — {scene.location.lighting_state}</span>}
+        </p>
+      )}
+      {scene.video && scene.video.shots.length > 0 && (
+        <details className="rounded-lg border border-red-500/20 bg-slate-950/40 p-2">
+          <summary className="cursor-pointer text-xs font-semibold uppercase tracking-[0.2em] text-red-300/80">
+            Shot plan ({scene.video.shots.length})
+          </summary>
+          <div className="mt-2 space-y-2">
+            {scene.video.shots.map((shot) => (
+              <div key={shot.shot_id} className="rounded-md border border-red-500/15 bg-slate-900/50 p-2">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-red-300/80">{shot.shot_id}</p>
+                <p className="mt-1 text-slate-400"><span className="font-medium text-slate-300">camera:</span> {shot.camera}</p>
+                <p className="text-slate-400"><span className="font-medium text-slate-300">action:</span> {shot.action}</p>
+                <p className="text-slate-400"><span className="font-medium text-slate-300">light:</span> {shot.light}</p>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
     </div>
   )
 }

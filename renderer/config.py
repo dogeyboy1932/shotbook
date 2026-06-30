@@ -16,7 +16,10 @@ class RendererSettings(BaseSettings):
     # --- Claude shot planning (moved off the old FastAPI middle tier) ---------
     anthropic_api_key: str | None = Field(default=None, validation_alias="ANTHROPIC_API_KEY")
     claude_video_model: str = "claude-opus-4-8"
-    max_video_shots_per_scene: int = 4
+    # Kept low on purpose: every extra shot is another SLERP morph in the single
+    # continuous rollout, and morphing between two different characters turns one
+    # face into another. Prefer one sustained take; 2 is the ceiling.
+    max_video_shots_per_scene: int = 2
 
     # Appended verbatim to every shot prompt for a consistent look across shots.
     video_style_suffix: str = (

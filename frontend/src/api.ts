@@ -143,6 +143,7 @@ export interface SavedClip {
   id: string // render job_id
   label: string
   videoUrl: string
+  scene: ComposedScene | null // the resolved scene + shot plan, for the preview
   createdAt: number
 }
 
