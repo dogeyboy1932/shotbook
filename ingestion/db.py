@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.config import settings
+from ingestion.config import settings
 
 # When a CA cert is configured (e.g. connecting to Supabase, whose pooler uses a
 # private CA), build a verified SSL context and hand it to asyncpg via

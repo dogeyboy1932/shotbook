@@ -27,7 +27,7 @@ from typing import TypeVar
 import anthropic
 from pydantic import BaseModel, ValidationError
 
-from app.config import settings
+from ingestion.config import settings
 
 logger = logging.getLogger("ingestion.llm_client")
 

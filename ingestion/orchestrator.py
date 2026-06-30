@@ -33,9 +33,9 @@ from dataclasses import dataclass, field
 
 from tqdm import tqdm
 
-from app.db import db_session_scope
-from app.config import settings
-from app.models import (
+from ingestion.db import db_session_scope
+from ingestion.config import settings
+from ingestion.models import (
     Book,
     Character,
     CharacterState,
