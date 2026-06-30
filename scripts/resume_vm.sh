@@ -37,15 +37,15 @@ echo "==> [2/2] streaming renderer venv (.venv-renderer) + flash-attn wheel + we
 echo "    (also installs anthropic + pydantic-settings for on-VM Claude shot planning)"
 python3 -m venv .venv-renderer && . .venv-renderer/bin/activate && pip install -q -U pip
 pip install -q torch==2.5.1 torchvision==0.20.1 $PT
-pip install -q -r services/renderer/requirements.txt
+pip install -q -r renderer/requirements.txt
 ABI=$(python -c 'import torch;print("TRUE" if torch._C._GLIBCXX_USE_CXX11_ABI else "FALSE")')
 pip install -q "https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.5cxx11abi${ABI}-cp310-cp310-linux_x86_64.whl"
 python - <<'PY'
 from huggingface_hub import snapshot_download, hf_hub_download
 snapshot_download("Wan-AI/Wan2.1-T2V-1.3B",
-                  local_dir="services/renderer/vendor/wan_models/Wan2.1-T2V-1.3B", max_workers=8)
+                  local_dir="renderer/vendor/wan_models/Wan2.1-T2V-1.3B", max_workers=8)
 hf_hub_download("zhuhz22/Causal-Forcing", "chunkwise/causal_forcing.pt",
-                local_dir="services/renderer/vendor/checkpoints")
+                local_dir="renderer/vendor/checkpoints")
 PY
 deactivate
 
@@ -57,7 +57,7 @@ echo "      ANTHROPIC_API_KEY=sk-ant-...   (used for shot planning AND ingestion
 echo "  Start the single VM service in tmux (renderer = plan + render, port 8004):"
 echo "      tmux new -s sb"
 echo "      set -a; . ./.env; set +a"
-echo "      CUDA_VISIBLE_DEVICES=0 .venv-renderer/bin/uvicorn services.renderer.main:app --host 0.0.0.0 --port 8004"
+echo "      CUDA_VISIBLE_DEVICES=0 .venv-renderer/bin/uvicorn renderer.main:app --host 0.0.0.0 --port 8004"
 echo "  Ingest a new story (writes to Supabase):"
 echo "      set -a; . ./.env; set +a"
 echo "      PYTHONPATH=. .venv-api/bin/python -m ingestion.orchestrator corpus/<book>.txt --title '...' --author '...'"

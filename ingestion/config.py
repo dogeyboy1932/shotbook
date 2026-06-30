@@ -1,7 +1,7 @@
 """Ingestion runtime configuration, loaded from environment variables.
 
 The ingestion pipeline (Claude extraction -> Supabase) is the only consumer.
-The VM renderer has its own settings in services/renderer/config.py.
+The VM renderer has its own settings in renderer/config.py.
 """
 from __future__ import annotations
 

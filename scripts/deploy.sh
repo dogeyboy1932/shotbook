@@ -86,7 +86,7 @@ say "3/6 building environment (resume_vm.sh) -- skipped if already built"
 "${SSH[@]}" "$HOST" "bash -s" <<REMOTE
 set -e
 cd "$RDIR"
-if [ -d .venv-renderer ] && [ -f services/renderer/vendor/checkpoints/chunkwise/causal_forcing.pt ]; then
+if [ -d .venv-renderer ] && [ -f renderer/vendor/checkpoints/chunkwise/causal_forcing.pt ]; then
   echo "   env already built -- skipping rebuild"
 else
   tmux kill-session -t setup 2>/dev/null || true
@@ -109,7 +109,7 @@ cd "$RDIR"
 tmux kill-session -t sb 2>/dev/null || true
 # One service: the renderer now owns Claude planning too, so the React app talks
 # only to Supabase + this. .env is sourced for ANTHROPIC_API_KEY (planning).
-tmux new-session -d -s sb -n renderer "cd $RDIR; set -a; . ./.env; set +a; CUDA_VISIBLE_DEVICES=0 .venv-renderer/bin/uvicorn services.renderer.main:app --host 0.0.0.0 --port 8004 > ~/renderer.log 2>&1"
+tmux new-session -d -s sb -n renderer "cd $RDIR; set -a; . ./.env; set +a; CUDA_VISIBLE_DEVICES=0 .venv-renderer/bin/uvicorn renderer.main:app --host 0.0.0.0 --port 8004 > ~/renderer.log 2>&1"
 printf "   waiting for the renderer to warm-load the model"
 for i in \$(seq 1 90); do
   if curl -s -m5 http://localhost:8004/health 2>/dev/null | grep -q '"loaded":true'; then echo " ready"; break; fi

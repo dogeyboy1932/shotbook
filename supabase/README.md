@@ -5,7 +5,7 @@ highlighted span. Apply both once against the project's Postgres.
 
 ## Files
 - `schema.sql` — Tier 1 (characters, locations), Tier 2 (temporal state deltas),
-  Tier 3 (paragraph beats). See `docs/ARCHITECTURE.md` for the model.
+  Tier 3 (paragraph beats). See `_docs/ARCHITECTURE.md` for the model.
 - `rpc_resolve_contexts.sql` — `resolve_contexts(paragraph_ids[])` SECURITY DEFINER
   function (resolved Tier-1 + latest Tier-2 state as JSON) + anon RLS read
   policies/grants for `books` and `paragraphs`.

@@ -66,3 +66,5 @@ video_jobs/
 # --- OS Garbage ---
 .DS_Store
 Thumbs.db
+
+.claude

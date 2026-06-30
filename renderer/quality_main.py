@@ -7,7 +7,7 @@ a job asks for quality=true.
 Runs in its OWN venv (.venv-quality, newer diffusers) on a separate port so it
 can sit warm alongside the fast 1.3B renderer on the same GPU.
 
-    CUDA_VISIBLE_DEVICES=0 .venv-quality/bin/uvicorn services.renderer.quality_main:app \
+    CUDA_VISIBLE_DEVICES=0 .venv-quality/bin/uvicorn renderer.quality_main:app \
         --host 0.0.0.0 --port 8005
 """
 from __future__ import annotations
@@ -19,8 +19,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 
-from services.renderer.quality_engine import QualityEngine
-from services.renderer.schema import RenderRequest, RenderResponse
+from renderer.quality_engine import QualityEngine
+from renderer.schema import RenderRequest, RenderResponse
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("quality.main")
@@ -77,4 +77,4 @@ async def render(req: RenderRequest) -> RenderResponse:
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("services.renderer.quality_main:app", host="0.0.0.0", port=8005, reload=False)
+    uvicorn.run("renderer.quality_main:app", host="0.0.0.0", port=8005, reload=False)

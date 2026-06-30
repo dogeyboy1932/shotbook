@@ -32,7 +32,7 @@ No middle API tier: the browser talks only to Supabase and the VM renderer.
 returns appearance (with the active delta), **emotional status**, location
 appearance, **lighting/atmosphere**, dialogue, SFX, and profiles.
 
-## Shot planning (services/renderer/planning.py)
+## Shot planning (renderer/planning.py)
 
 - `compose_scene` merges the span's resolved contexts into one scene.
 - `generate_video_plan` asks Claude (structured output) for camera/action/light +
@@ -40,7 +40,7 @@ appearance, **lighting/atmosphere**, dialogue, SFX, and profiles.
   (appearance, current status, setting + atmosphere, style) into every shot's prompt
   so identity/look never drift and the full state is grounded in each clip.
 
-## Rendering (services/renderer/renderer.py)
+## Rendering (renderer/renderer.py)
 
 The vendored Causal-Forcing **Wan2.1-T2V-1.3B** streaming model generates the whole
 passage as a **single autoregressive rollout**: the KV-cache carries pixels forward

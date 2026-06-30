@@ -2,7 +2,7 @@
 Run with the .venv-quality venv (newer diffusers). Mirrors the team's
 generate_video.py but uses the 5B model at 720p via diffusers.
 
-  CUDA_VISIBLE_DEVICES=0 .venv-quality/bin/python services/renderer/quality_render.py \
+  CUDA_VISIBLE_DEVICES=0 .venv-quality/bin/python renderer/quality_render.py \
       --prompt "your fully assembled shot prompt" --out test5b.mp4 --frames 81 --steps 40
 """
 import argparse, time

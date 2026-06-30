@@ -12,7 +12,7 @@ GPU — streamed to the browser as it generates.
 ```
 React frontend ──► Supabase           books + paragraphs, and resolve_contexts() RPC
    (frontend/)  └─► VM renderer        POST /generate (plan + render), live MJPEG, /ingest
-                     (services/renderer, one GPU process)
+                     (renderer, one GPU process)
                        ├─ plan   : Claude shot breakdown grounded in world-state
                        └─ render : Wan2.1-1.3B streaming model, one seamless rollout
 
@@ -26,12 +26,12 @@ There is **no middle API tier** — the browser talks only to Supabase and the V
 | Path | What |
 |------|------|
 | `frontend/` | React + Vite reader/studio UI |
-| `services/renderer/` | The single VM backend: shot planning (Claude) + streaming render + `/ingest` upload. Holds the vendored Wan engine. |
+| `renderer/` | The single VM backend: shot planning (Claude) + streaming render + `/ingest` upload. Holds the vendored Wan engine. |
 | `ingestion/` | Two-pass Claude pipeline that writes the world-state to Supabase (run as a script or via the UI). |
 | `supabase/` | Database: `schema.sql` (3-tier world-state) + `rpc_resolve_contexts.sql`. |
 | `corpus/` | Public-domain source texts for ingestion smoke tests. |
 | `scripts/` | `deploy.sh` (one-command bring-up), `resume_vm.sh`, deploy config, and the runbook (`DEPLOY.md`). |
-| `docs/` | Architecture and design notes. |
+| `_docs/` | Architecture and design notes. |
 | `.env.example` | Every config var, documented (see it before deploying). |
 
 ## Quickstart
@@ -43,4 +43,4 @@ There is **no middle API tier** — the browser talks only to Supabase and the V
    highlight → **Query** → **Generate**.
 
 The 3-tier world-state model (immutable baselines + temporal deltas per paragraph)
-is documented in `docs/ARCHITECTURE.md`.
+is documented in `_docs/ARCHITECTURE.md`.

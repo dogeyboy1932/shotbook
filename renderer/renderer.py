@@ -65,7 +65,7 @@ class RenderEngine:
         cf_streaming.load_cf_pipeline() inserts VENDOR_DIR on sys.path and
         os.chdir()'s into it (the engine references configs/ and the downloaded
         wan_models/ + checkpoints/ by relative path), so weights must live under
-        services/renderer/vendor/{wan_models,checkpoints} (see scripts/setup_renderer.sh).
+        renderer/vendor/{wan_models,checkpoints} (see scripts/setup_renderer.sh).
         """
         if self._pipe is not None:
             return

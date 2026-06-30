@@ -12,7 +12,7 @@ High-level flow used by the frontend:
 
 Low-level /render and /render/stream (POST a raw shot list) are kept for testing.
 
-    CUDA_VISIBLE_DEVICES=0 .venv-renderer/bin/uvicorn services.renderer.main:app \
+    CUDA_VISIBLE_DEVICES=0 .venv-renderer/bin/uvicorn renderer.main:app \
         --host 0.0.0.0 --port 8004
 """
 from __future__ import annotations
@@ -33,11 +33,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 
-from services.renderer.ingest import router as ingest_router
-from services.renderer.planning import VideoPlanningError, compose_scene, generate_video_plan
-from services.renderer.renderer import RenderEngine
-from services.renderer.schema import RenderRequest, RenderResponse
-from services.renderer.schemas import GenerateRequest
+from renderer.ingest import router as ingest_router
+from renderer.planning import VideoPlanningError, compose_scene, generate_video_plan
+from renderer.renderer import RenderEngine
+from renderer.schema import RenderRequest, RenderResponse
+from renderer.schemas import GenerateRequest
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("renderer.main")
@@ -213,7 +213,7 @@ def _save_final_mp4(job_id: str, job_dir: Path) -> None:
 
 
 def _planning_settings_seconds() -> float:
-    from services.renderer.config import settings
+    from renderer.config import settings
     return settings.render_seconds_per_shot
 
 
@@ -260,4 +260,4 @@ def render_stream(req: RenderRequest) -> StreamingResponse:
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("services.renderer.main:app", host="0.0.0.0", port=8004, reload=False)
+    uvicorn.run("renderer.main:app", host="0.0.0.0", port=8004, reload=False)

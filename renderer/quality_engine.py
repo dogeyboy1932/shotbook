@@ -24,7 +24,7 @@ from diffusers.utils import export_to_video
 # Reuse the exact same stitch step the fast renderer uses (pure ffmpeg; importing
 # renderer.py does NOT pull in the 1.3B/flash-attn stack -- that's lazy-loaded
 # inside RenderEngine.load, so this is safe in the quality venv).
-from services.renderer.renderer import _ffmpeg_concat
+from renderer.renderer import _ffmpeg_concat
 
 logger = logging.getLogger("quality")
 

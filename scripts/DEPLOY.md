@@ -1,6 +1,6 @@
 # Deploy & run
 
-The whole stack: a GPU VM running the renderer (`services/renderer`), Supabase
+The whole stack: a GPU VM running the renderer (`renderer`), Supabase
 for data, and the Vite frontend on your laptop.
 
 ## One command (fresh GPU instance)
@@ -21,7 +21,7 @@ Only the IP changes per instance; the key path + secrets live in
 `scripts/deploy.config` (gitignored).
 
 ## What runs where
-- **VM** (`tmux sb`): `services.renderer.main:app` on `:8004` — shot planning
+- **VM** (`tmux sb`): `renderer.main:app` on `:8004` — shot planning
   (Claude) + streaming render + `/ingest`. This is the only server-side process.
 - **Laptop**: the SSH tunnel (`localhost:8004 → VM:8004`) and the Vite dev server.
 - **Supabase**: data + the `resolve_contexts` RPC (frontend calls it directly).
@@ -30,7 +30,7 @@ Only the IP changes per instance; the key path + secrets live in
 ```bash
 ssh <user>@<vm-ip> -i private_key.pem
 cd ~/shotbook && set -a; . ./.env; set +a
-CUDA_VISIBLE_DEVICES=0 .venv-renderer/bin/uvicorn services.renderer.main:app --host 0.0.0.0 --port 8004
+CUDA_VISIBLE_DEVICES=0 .venv-renderer/bin/uvicorn renderer.main:app --host 0.0.0.0 --port 8004
 ```
 
 ## Ingest a story

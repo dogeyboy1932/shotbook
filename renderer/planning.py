@@ -23,8 +23,8 @@ from typing import Literal
 import anthropic
 from pydantic import BaseModel, Field, ValidationError
 
-from services.renderer.config import settings
-from services.renderer.schemas import (
+from renderer.config import settings
+from renderer.schemas import (
     CharacterContextPayload,
     ComposedScenePayload,
     DialogueLinePayload,

@@ -6,7 +6,7 @@ POST /generate (the resolved context payloads from Supabase's resolve_contexts
 RPC) and the shot-plan shapes the planner produces.
 
 AUDIO PAUSED: audio_prompt fields are kept for a one-step revive but are not
-populated right now (see services/renderer/planning.py).
+populated right now (see renderer/planning.py).
 """
 from __future__ import annotations
 
