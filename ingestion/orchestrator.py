@@ -205,7 +205,8 @@ async def _extract_registry_chunk(
 
 
 async def run_pass_1_registry(
-    book_id: int, paragraphs: list[SegmentedParagraph], pool: GpuWorkerPool
+    book_id: int, paragraphs: list[SegmentedParagraph], pool: GpuWorkerPool,
+    on_chunk=None,
 ) -> RegistryMaps:
     """Extracts and persists Tier 1 (characters, locations) for the whole book."""
 
@@ -219,6 +220,8 @@ async def run_pass_1_registry(
     async def _tracked_registry_chunk(text: str) -> RegistryExtractionResult:
         result = await _extract_registry_chunk(pool, text)
         bar.update(1)
+        if on_chunk:
+            on_chunk()
         return result
 
     results = await asyncio.gather(*(_tracked_registry_chunk(text) for text in chunk_texts))
@@ -323,7 +326,8 @@ async def _extract_beats_chunk(
 
 
 async def _generate_all_beats(
-    paragraphs: list[SegmentedParagraph], registry: RegistryMaps, pool: GpuWorkerPool
+    paragraphs: list[SegmentedParagraph], registry: RegistryMaps, pool: GpuWorkerPool,
+    on_batch=None,
 ) -> list[ParagraphBeat]:
     system_prompt = BEATS_SYSTEM_PROMPT_TEMPLATE.format(
         characters="; ".join(registry.character_summaries) or "none",
@@ -335,6 +339,8 @@ async def _generate_all_beats(
     async def _tracked_beats_chunk(batch: list[SegmentedParagraph]) -> list[ParagraphBeat]:
         result = await _extract_beats_chunk(pool, batch, system_prompt)
         bar.update(1)
+        if on_batch:
+            on_batch()
         return result
 
     # This is the data-parallel fan-out: every batch is an independent
@@ -549,9 +555,10 @@ async def _apply_beats_sequentially(
 
 
 async def run_pass_2_beats(
-    book_id: int, paragraphs: list[SegmentedParagraph], registry: RegistryMaps, pool: GpuWorkerPool
+    book_id: int, paragraphs: list[SegmentedParagraph], registry: RegistryMaps, pool: GpuWorkerPool,
+    on_batch=None,
 ) -> None:
-    beats = await _generate_all_beats(paragraphs, registry, pool)
+    beats = await _generate_all_beats(paragraphs, registry, pool, on_batch=on_batch)
     raw_text_by_sequence = {p.sequence_index: (p.chapter_number, p.raw_text) for p in paragraphs}
     await _apply_beats_sequentially(book_id, raw_text_by_sequence, beats, registry)
 
@@ -561,17 +568,40 @@ async def run_pass_2_beats(
 # ---------------------------------------------------------------------------
 
 
-async def ingest_book(*, title: str, author: str | None, source_uri: str, raw_book_text: str) -> int:
+async def ingest_book(
+    *, title: str, author: str | None, source_uri: str, raw_book_text: str, progress_cb=None
+) -> int:
     """Runs the full two-pass ingestion pipeline for one book end-to-end.
 
     Returns the new book_id. Raises on unrecoverable errors (e.g. zero
     paragraphs found); per-chunk LLM failures are logged and skipped rather
     than aborting the whole run, so a single malformed chunk never loses an
     entire book's ingestion progress.
+
+    `progress_cb(stage: str, completed: int, total: int)` is called as each
+    LLM unit (registry chunk / beat batch) finishes, so a UI can show a
+    progress bar + ETA. The completed/total are global across both passes.
     """
+    import math
+
     paragraphs = segment_book_into_paragraphs(raw_book_text)
     if not paragraphs:
         raise ValueError(f"No paragraphs could be segmented from source_uri={source_uri!r}")
+
+    # Total LLM "units": Pass-1 registry chunks (~40 paras each) + Pass-2 beat batches.
+    registry_units = max(1, math.ceil(len(paragraphs) / 40))
+    beat_units = max(1, math.ceil(len(paragraphs) / settings.paragraph_chunk_size))
+    total_units = registry_units + beat_units
+    completed = 0
+
+    def _bump(stage: str) -> None:
+        nonlocal completed
+        completed += 1
+        if progress_cb:
+            progress_cb(stage, min(completed, total_units), total_units)
+
+    if progress_cb:
+        progress_cb("Preparing", 0, total_units)
 
     async with db_session_scope() as session:
         book = Book(title=title, author=author, source_uri=source_uri)
@@ -581,8 +611,14 @@ async def ingest_book(*, title: str, author: str | None, source_uri: str, raw_bo
 
     pool = GpuWorkerPool()
     try:
-        registry = await run_pass_1_registry(book_id, paragraphs, pool)
-        await run_pass_2_beats(book_id, paragraphs, registry, pool)
+        registry = await run_pass_1_registry(
+            book_id, paragraphs, pool, on_chunk=lambda: _bump("Analyzing characters & locations")
+        )
+        await run_pass_2_beats(
+            book_id, paragraphs, registry, pool, on_batch=lambda: _bump("Extracting scene beats")
+        )
+        if progress_cb:
+            progress_cb("Saving to library", total_units, total_units)
     except Exception:
         async with db_session_scope() as session:
             book = await session.get(Book, book_id)
