@@ -8,6 +8,9 @@ interface LiveVideoPlayerProps {
   planning: boolean
   status: string | null
   error: string | null
+  /** 'realtime' shows live frames; 'finished' hides them (the render still runs,
+   *  driven by the same stream connection) and reveals only the completed mp4. */
+  mode?: 'realtime' | 'finished'
 }
 
 export default function LiveVideoPlayer({
@@ -16,6 +19,7 @@ export default function LiveVideoPlayer({
   planning,
   status,
   error,
+  mode = 'realtime',
 }: LiveVideoPlayerProps) {
   const [streamActive, setStreamActive] = useState(false)
   const [frameCount, setFrameCount] = useState(0)
@@ -83,12 +87,15 @@ export default function LiveVideoPlayer({
 
   const showStream = streamUrl && !videoUrl
   const isRendering = showStream && (streamActive || status === 'running' || status === 'planned')
+  // 'finished' mode: the stream still runs (it drives the GPU render), but we
+  // keep the frames invisible and reveal only the completed mp4.
+  const hideFrames = mode === 'finished' && Boolean(showStream)
 
   return (
     <div className="space-y-2 rounded-2xl border border-emerald-400/30 bg-emerald-400/10 p-3 text-sm">
       <div className="flex items-center justify-between gap-2">
         <p className="font-semibold text-emerald-300">
-          {videoUrl ? 'Generated video' : isRendering ? 'Live preview' : 'Starting render…'}
+          {videoUrl ? 'Generated video' : hideFrames ? 'Rendering video…' : isRendering ? 'Live preview' : 'Starting render…'}
         </p>
         {isRendering && streamActive && (
           <span className="flex items-center gap-1.5 text-xs text-emerald-400/90">
@@ -96,31 +103,39 @@ export default function LiveVideoPlayer({
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
               <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
             </span>
-            {frameCount > 0 ? `${frameCount} frames` : 'Connecting…'}
+            {frameCount > 0 ? `${frameCount} frames${hideFrames ? ' rendered' : ''}` : 'Connecting…'}
           </span>
         )}
       </div>
 
       <div className="relative aspect-[832/480] overflow-hidden rounded-xl border border-slate-700 bg-black">
         {showStream && (
+          // Kept mounted even when hidden so the MJPEG connection stays alive and
+          // keeps driving the render in 'finished' mode.
           <img
             ref={imgRef}
             src={streamUrl}
             alt="Live video generation"
-            className="h-full w-full object-contain"
+            className={`h-full w-full object-contain ${hideFrames ? 'opacity-0' : ''}`}
           />
         )}
         {videoUrl && (
           <video src={videoUrl} controls autoPlay loop className="h-full w-full object-contain" />
         )}
-        {showStream && !streamActive && (
+        {showStream && !streamActive && !hideFrames && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/60">
             <span className="inline-block h-6 w-6 animate-spin rounded-full border-2 border-emerald-400 border-t-transparent" />
           </div>
         )}
+        {hideFrames && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/80 text-slate-300">
+            <span className="inline-block h-7 w-7 animate-spin rounded-full border-2 border-emerald-400 border-t-transparent" />
+            <p className="text-xs">Rendering — your video will appear here when it's done.</p>
+          </div>
+        )}
       </div>
 
-      {isRendering && (
+      {isRendering && !hideFrames && (
         <p className="text-xs text-slate-400">
           Frames stream in real time as the GPU generates them — an uninterrupted rollout rather than waiting for the full clip.
         </p>

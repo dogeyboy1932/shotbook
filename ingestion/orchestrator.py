@@ -155,6 +155,23 @@ def _normalize(name: str) -> str:
     return name.strip().lower()
 
 
+def _cap_registry(entities: dict, freq: dict[str, int], cap: int, label: str) -> dict:
+    """Threshold so a single book can't overflood the DB with bit-part entities.
+    Keeps the `cap` most-frequently-mentioned entities (by how many extraction
+    chunks named them) and drops the long tail with a warning. cap<=0 disables."""
+    if cap <= 0 or len(entities) <= cap:
+        return entities
+    ranked = sorted(entities, key=lambda k: freq.get(k, 0), reverse=True)
+    dropped = ranked[cap:]
+    logger.warning(
+        "registry cap: %d %s exceeded limit %d; dropping %d least-mentioned: %s",
+        len(entities), label, cap, len(dropped),
+        ", ".join(entities[k].canonical_name for k in dropped[:10])
+        + (" …" if len(dropped) > 10 else ""),
+    )
+    return {k: entities[k] for k in ranked[:cap]}
+
+
 def _merge_character_profile(base: dict, delta: CharacterProfileDelta | None) -> dict:
     """Overlays a sparse CharacterProfileDelta onto a full profile snapshot,
     producing the new full snapshot. Same carry-forward semantics as the
@@ -229,10 +246,15 @@ async def run_pass_1_registry(
 
     merged_characters: dict[str, Character] = {}
     merged_locations: dict[str, Location] = {}
+    # How many extraction chunks mentioned each entity -> a cheap importance
+    # signal for the registry cap below (main cast recurs across chunks).
+    character_freq: dict[str, int] = {}
+    location_freq: dict[str, int] = {}
 
     for result in results:
         for candidate in result.characters:
             key = _normalize(candidate.canonical_name)
+            character_freq[key] = character_freq.get(key, 0) + 1
             if key not in merged_characters:
                 merged_characters[key] = Character(
                     book_id=book_id,
@@ -250,6 +272,7 @@ async def run_pass_1_registry(
 
         for candidate in result.locations:
             key = _normalize(candidate.canonical_name)
+            location_freq[key] = location_freq.get(key, 0) + 1
             if key not in merged_locations:
                 merged_locations[key] = Location(
                     book_id=book_id,
@@ -262,6 +285,12 @@ async def run_pass_1_registry(
             else:
                 existing = merged_locations[key]
                 existing.aliases = sorted(set(existing.aliases) | set(candidate.aliases))
+
+    # Threshold before persisting so the DB is never overflooded with bit parts.
+    merged_characters = _cap_registry(
+        merged_characters, character_freq, settings.max_characters_per_book, "characters")
+    merged_locations = _cap_registry(
+        merged_locations, location_freq, settings.max_locations_per_book, "locations")
 
     maps = RegistryMaps()
     async with db_session_scope() as session:

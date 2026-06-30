@@ -5,6 +5,10 @@ import tailwindcss from '@tailwindcss/vite'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // Load env from the repo root so the WHOLE project is configured by one
+  // top-level .env (VITE_* vars are read from ../.env). Only VITE_-prefixed
+  // vars are exposed to the bundle, so BVG_/secret entries stay server-side.
+  envDir: '..',
   server: {
     // Bind to 0.0.0.0, not just loopback, so a forwarded/tunneled 5173
     // (e.g. from a remote GPU VM or container) can actually reach the dev

@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import shutil
 import threading
 import time
@@ -32,7 +31,9 @@ import cv2
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import BaseModel
 
+from renderer.config import settings
 from renderer.ingest import router as ingest_router
 from renderer.planning import VideoPlanningError, compose_scene, generate_video_plan
 from renderer.renderer import RenderEngine
@@ -42,7 +43,8 @@ from renderer.schemas import GenerateRequest
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("renderer.main")
 
-engine = RenderEngine(model=os.getenv("RENDERER_MODEL", "chunkwise"))
+# Model variant is a config knob (BVG_RENDERER_MODEL); see renderer/config.py.
+engine = RenderEngine(model=settings.renderer_model)
 
 # Single GPU, single model instance -> serialize renders.
 _render_lock = asyncio.Lock()
@@ -91,10 +93,10 @@ async def health() -> dict:
 # ---------------------------------------------------------------------------
 # Shared MJPEG framing
 # ---------------------------------------------------------------------------
-def _mjpeg(shots: list[dict], out_dir: str, seconds_per_shot: float):
+def _mjpeg(shots: list[dict], out_dir: str, seconds_per_shot: float, bus=None):
     """Run the seamless rollout and yield multipart/x-mixed-replace JPEG frames."""
     with _stream_lock:  # one render at a time on the single GPU
-        for frame in engine.stream_plan(shots, out_dir, seconds_per_shot):
+        for frame in engine.stream_plan(shots, out_dir, seconds_per_shot, bus=bus):
             bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
             ok, jpg = cv2.imencode(".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
             if not ok:
@@ -132,6 +134,7 @@ async def generate(req: GenerateRequest) -> dict:
         "seconds_per_shot": req.seconds_per_shot or None,
         "video_path": None,
         "error": None,
+        "bus": engine.new_bus(),  # live-steer channel for /jobs/{id}/steer (#5)
     }
     return {"job_id": job_id, "scene": scene.model_dump()}
 
@@ -171,11 +174,12 @@ def job_stream(job_id: str) -> StreamingResponse:
     job_dir = JOBS_DIR / job_id
     seconds = job["seconds_per_shot"] or _planning_settings_seconds()
     shots = job["plan"]["shots"]
+    bus = job.get("bus")
     _jobs[job_id]["status"] = "running"
 
     def frames():
         try:
-            yield from _mjpeg(shots, str(job_dir), seconds)
+            yield from _mjpeg(shots, str(job_dir), seconds, bus=bus)
             _save_final_mp4(job_id, job_dir)
         except Exception as exc:  # noqa: BLE001 - surface render failures into the job
             _jobs[job_id]["status"] = "failed"
@@ -199,6 +203,25 @@ def job_video(job_id: str) -> FileResponse:
     return FileResponse(job["video_path"], media_type="video/mp4")
 
 
+class SteerRequest(BaseModel):
+    prompt: str = ""
+
+
+@app.post("/jobs/{job_id}/steer")
+def steer_job(job_id: str, req: SteerRequest) -> dict:
+    """Live-steer a running real-time render (#5): set the user's typed modifier
+    on the job's PromptBus; the render loop morphs toward it at the next chunk.
+    An empty prompt clears the steer (frames drift back to the planned shot)."""
+    job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    bus = job.get("bus")
+    if bus is None:
+        raise HTTPException(status_code=409, detail="job has no steer channel")
+    bus.set(req.prompt)
+    return {"ok": True}
+
+
 def _save_final_mp4(job_id: str, job_dir: Path) -> None:
     final = job_dir / "final_story.mp4"
     if final.exists():
@@ -213,7 +236,6 @@ def _save_final_mp4(job_id: str, job_dir: Path) -> None:
 
 
 def _planning_settings_seconds() -> float:
-    from renderer.config import settings
     return settings.render_seconds_per_shot
 
 

@@ -237,6 +237,15 @@ export const api = {
     })
   },
 
+  // Live-steer a running real-time render (#5): push a text modifier onto the
+  // job's prompt bus; the render loop morphs the frames toward it at the next
+  // chunk. An empty prompt clears the steer (frames drift back to the plan).
+  steerGeneration: (jobId: string, prompt: string) =>
+    request<{ ok: boolean }>(`/jobs/${jobId}/steer`, {
+      method: 'POST',
+      body: JSON.stringify({ prompt }),
+    }),
+
   // Poll the VM render job; absolutize the VM-relative URLs it returns.
   getVideoJob: async (jobId: string): Promise<VideoJob> => {
     const job = await request<VideoJob>(`/jobs/${jobId}`)

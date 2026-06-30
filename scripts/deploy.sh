@@ -4,10 +4,10 @@
 # Run from your laptop, from the repo root:
 #     scripts/deploy.sh <VM_IP>
 #
-# Everything else (SSH key path, DB URL, Anthropic key) lives ONCE in
-# scripts/deploy.config -- copy scripts/deploy.config.example to that path and
-# fill it in. The only per-instance argument is the IP, because that's the only
-# thing that changes when you spin up a new box.
+# Everything else (SSH key path, DB URL, Anthropic key, frontend VITE_* vars)
+# lives ONCE in the repo-root .env -- copy .env.example to .env and fill it in.
+# The only per-instance argument is the IP, because that's the only thing that
+# changes when you spin up a new box.
 #
 # What it does, end to end, blocking until the box is usable:
 #   1. probe the VM (SSH + GPU)
@@ -21,13 +21,13 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
-CONFIG="${DEPLOY_CONFIG:-$HERE/deploy.config}"
+CONFIG="${DEPLOY_CONFIG:-$REPO/.env}"
 
 VM_IP="${1:-}"
 if [ -z "$VM_IP" ]; then echo "usage: scripts/deploy.sh <VM_IP>"; exit 1; fi
 if [ ! -f "$CONFIG" ]; then
   echo "!! missing $CONFIG"
-  echo "   cp scripts/deploy.config.example scripts/deploy.config  and fill it in"
+  echo "   cp .env.example .env  and fill it in"
   exit 1
 fi
 
@@ -64,21 +64,23 @@ REMOTE_HOME="$("${SSH[@]}" "$HOST" 'echo $HOME')"
 RDIR="$REMOTE_HOME/shotbook"
 
 say "2/6 pushing repo + writing VM .env (-> $RDIR)"
+# Never push the laptop's root .env (frontend VITE_*, VM_* connection secrets);
+# the VM gets its own curated .env written below.
 rsync -az -e "ssh -p $VM_PORT -i $KEYLINK -o ControlPath=$CM" \
   --exclude _SPED --exclude .git --exclude '*.pem' --exclude '.venv*' \
   --exclude wan_models --exclude node_modules --exclude '*.mp4' \
-  --exclude supabase.txt --exclude scripts/deploy.config \
+  --exclude .env --exclude '.env.local' \
   "$REPO/" "$HOST:$RDIR/"
-# Build the VM .env from config; CA path is derived from the remote home.
+# Build the VM .env straight from the single root .env: carry every renderer/
+# ingestion var (BVG_*) and the Anthropic key, then add the VM-derived bits.
 ENVTMP="$(mktemp)"
+grep -E '^(BVG_|ANTHROPIC_API_KEY=)' "$CONFIG" > "$ENVTMP" || true
 {
-  echo "BVG_DATABASE_URL=$DBURL"
-  echo "ANTHROPIC_API_KEY=$ANTHRO"
   echo "BVG_DB_SSL_CA=$REMOTE_HOME/supabase_ca.pem"
-  echo "BVG_RENDERER_URL=http://localhost:8004"
-  echo "BVG_DB_POOL_SIZE=5"
-  echo "BVG_DB_MAX_OVERFLOW=2"
-} > "$ENVTMP"
+  grep -qE '^BVG_RENDERER_URL=' "$CONFIG" || echo "BVG_RENDERER_URL=http://localhost:8004"
+  grep -qE '^BVG_DB_POOL_SIZE=' "$CONFIG" || echo "BVG_DB_POOL_SIZE=5"
+  grep -qE '^BVG_DB_MAX_OVERFLOW=' "$CONFIG" || echo "BVG_DB_MAX_OVERFLOW=2"
+} >> "$ENVTMP"
 scp -q -P "$VM_PORT" -i "$KEYLINK" -o "ControlPath=$CM" "$ENVTMP" "$HOST:$RDIR/.env"
 rm -f "$ENVTMP"
 
@@ -136,8 +138,8 @@ say "6/6 READY"
 cat <<DONE
 
   Open:  http://localhost:5173
-  (frontend/.env.local needs VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY,
-   VITE_VM_BASE_URL=http://localhost:8004)
+  (root .env needs VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY,
+   VITE_VM_BASE_URL=http://localhost:8004 -- Vite reads them via envDir)
 
   VM service:   tmux 'sb' on $HOST  (renderer :8004 — plan + render)
   Stop laptop side later:

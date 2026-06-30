@@ -142,15 +142,19 @@ sustained take. Add a second shot ONLY when the passage clearly contains a \
 distinct second beat -- a location change, a time jump, or a separate physical \
 action -- and never more than two.
 
-CRITICAL, identity preservation: the renderer plays the shots as ONE \
-continuously morphing take, smoothly blending the picture of each shot into the \
-next (there is no true hard cut). Because of this you must NEVER alternate \
-between separate close-ups of two DIFFERENT characters within the take -- the \
-morph would literally turn one person's face into the other's. If two \
-characters share the moment, frame them TOGETHER in a single sustained shot, \
-each held in a distinct part of the frame, instead of cutting between \
-individual close-ups. Only let the primary on-screen character change at a \
-genuine 'cut_new_scene'. When in doubt, use one shot.
+CRITICAL, identity preservation: within a single continuous take the renderer \
+MORPHS smoothly from one shot's picture into the next, so within ONE scene you \
+must NEVER alternate between separate close-ups of two DIFFERENT characters -- \
+the morph would literally turn one person's face into the other's. If two \
+characters share a continuous moment, frame them TOGETHER in one sustained \
+shot, each held in a distinct part of the frame, rather than cutting between \
+individual close-ups. The ONE exception is a genuine scene break: when the next \
+shot is a truly distinct scene, subject, or vantage, mark it 'cut_new_scene' -- \
+the renderer then performs a REAL hard cut (not a morph), so you MAY switch to \
+a different single subject there. This is exactly how to handle, e.g., a \
+character's face and then a separate insert of the thing they are looking at: \
+two shots, the second a 'cut_new_scene'. When in doubt within one continuous \
+action, use one shot.
 
 GROUND EVERY SHOT IN THE HIGHLIGHTED PASSAGE. Depict what THESE exact sentences \
 describe -- the specific images, objects, gazes, faces, and reactions the reader \
@@ -169,14 +173,18 @@ happening, then -- for each visible character -- their emotional expression \
 (face and body language) and their exact position and blocking in the frame \
 and relative to each other and the setting. Show the feeling and the staging; \
 do NOT redescribe what anyone or the place looks like (that is supplied \
-separately). e.g. "She freezes mid-step at the threshold, eyes wide with dread, \
-one hand braced against the doorframe as he advances from the shadows behind \
-her."
-- subjects: the names of the character(s) the camera FOCUSES on / who are most \
-prominent in THIS shot -- a subset of the characters in the state. Use an empty \
-list for a pure setting or insert shot. (Every character in the scene stays \
-consistently present and visually distinct across all shots; this field only \
-marks who the shot favours, it does not remove anyone.)
+separately). If the shot is a pure insert on a single object or body part (an \
+eye, a hand, a letter), describe exactly ONE of it -- "a single clouded eye", \
+never "eyes" -- and leave subjects empty so no other character is pulled into \
+frame. e.g. "She freezes mid-step at the threshold, eyes wide with dread, one \
+hand braced against the doorframe as he advances from the shadows behind her."
+- subjects: the names of ONLY the characters actually VISIBLE on screen in \
+THIS shot -- a subset of the scene's characters. These, and only these, get \
+described and rendered in the shot; anyone you leave out does NOT appear in the \
+frame. Use an empty list for a pure setting shot or an insert on an object or \
+body part (an eye, a hand). Do NOT list a character merely because they matter \
+to the moment or are referred to -- list them only if the camera literally sees \
+them this shot. A single-character close-up has exactly one name here.
 - light: the lighting and time of day for this shot only, e.g. "Soft dawn \
 golden-hour light."
 - continuity: how this shot's video clip relates to the PREVIOUS shot's clip. \
@@ -207,7 +215,7 @@ class ShotCandidate(BaseModel):
     shot_id: str = Field(..., description="Short slug reflecting sequence order, e.g. '01_the_chase'")
     camera: str = Field(..., description="Shot type and camera angle/movement only")
     action: str = Field(..., description="The action in this shot: motion + each visible character's emotional expression and exact position/blocking -- no appearance or setting description")
-    subjects: list[str] = Field(default_factory=list, description="Names of the character(s) the camera focuses on / most prominent this shot (subset of the given characters); empty for a pure setting/insert shot. Does NOT drop other characters from the scene.")
+    subjects: list[str] = Field(default_factory=list, description="Names of ONLY the characters actually visible on screen this shot (subset of the given characters); these alone are described and rendered, anyone omitted does not appear. Empty for a pure setting shot or an insert on an object/body part. A single-character close-up lists exactly one name.")
     light: str = Field(..., description="Lighting and time of day for this shot only")
     continuity: ContinuityValue = Field(
         ...,
@@ -297,22 +305,27 @@ def _build_prompt(*, camera: str, action: str, light: str, subjects: list[str], 
     world anchors, each character led by emotion + position so the model renders
     the feeling and the staging rather than a wall of repeated appearance text.
 
-    IDENTITY STABILITY: the render loop plays the whole passage as ONE morphing
-    rollout (every shot boundary is a SLERP, never a hard cut), so the cast must
-    be described IDENTICALLY in every shot. We therefore anchor EVERY scene
-    character in EVERY shot -- dropping a character between shots makes the
-    morph reinterpret one person as another (Fortunato -> Montresor). `subjects`
-    only marks who the camera favours this shot; it never removes an identity."""
+    ON-SCREEN ONLY: describe just the characters the planner marked as `subjects`
+    (visible this shot). A single-subject insert (one face, one eye) must not
+    drag the rest of the cast into frame -- that is what put two vulture eyes in
+    a one-eye shot. Cross-shot identity morphing is handled upstream: within a
+    continuous take the planner frames interacting characters TOGETHER in one
+    shot, and a genuine scene change is a 'cut_new_scene' that the engine renders
+    as a true hard cut rather than a morph."""
     parts: list[str] = [camera, action]
 
-    names = list(world.characters)  # the full, stable cast -- never per-shot subset
+    # Describe ONLY who/what is on screen in THIS shot. A single-subject insert
+    # (one face, one eye) must not drag the rest of the cast into frame -- that is
+    # what put two vulture eyes in a one-eye shot. Cross-shot identity morphing is
+    # prevented upstream: within a continuous take the planner frames interacting
+    # characters TOGETHER in one shot; switching to a different lone subject only
+    # happens at a 'cut_new_scene', which the engine renders as a true hard cut.
+    names = [n for n in subjects if n in world.characters]
     if len(names) > 1:
         parts.append(
-            f"The scene holds {len(names)} distinct, separate people, each kept in a "
-            "different part of the frame; they keep their own faces and wardrobe and "
-            "never blend into one face, merge, or swap identities:"
+            f"{len(names)} distinct, separate people, each kept in a different part of "
+            "the frame; they never blend into one face, merge, or swap identities:"
         )
-    in_focus = {n for n in subjects if n in world.characters}
     for name in names:
         baseline, position = _split_on(world.characters[name], "; currently: ")
         lead = [name]
@@ -320,8 +333,7 @@ def _build_prompt(*, camera: str, action: str, light: str, subjects: list[str], 
             lead.append(emotion)
         if position:
             lead.append(position)
-        focus = " (in focus this shot)" if name in in_focus else ""
-        parts.append(f"{', '.join(lead)}: {_identity(baseline)}{focus}.")
+        parts.append(f"{', '.join(lead)}: {_identity(baseline)}.")
 
     if world.location:
         base_loc, atmosphere = _split_on(world.location, "; atmosphere: ")

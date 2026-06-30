@@ -30,5 +30,13 @@ class Settings(BaseSettings):
     ingest_max_retries: int = 3
     paragraph_chunk_size: int = 4        # paragraphs grouped into one Pass-2 call
 
+    # --- Registry thresholds (don't overflood the DB) --------------------
+    # The LLM will happily emit a bit-part character/location for every passing
+    # mention. Cap how many of each a single book may persist; the most-
+    # frequently-mentioned entities are kept and the long tail is dropped with a
+    # warning. 0 disables a cap.
+    max_characters_per_book: int = 60
+    max_locations_per_book: int = 40
+
 
 settings = Settings()

@@ -6,7 +6,7 @@ for data, and the Vite frontend on your laptop.
 ## One command (fresh GPU instance)
 
 ```bash
-cp scripts/deploy.config.example scripts/deploy.config   # fill in once (see .env.example block 3)
+cp .env.example .env   # fill in once — the single source of truth for everything
 scripts/deploy.sh <VM_IP>
 ```
 
@@ -17,8 +17,9 @@ scripts/deploy.sh <VM_IP>
 4. start the renderer on `:8004` (tmux `sb`, model warm),
 5. open the `localhost:8004` SSH tunnel and start the frontend (`http://localhost:5173`).
 
-Only the IP changes per instance; the key path + secrets live in
-`scripts/deploy.config` (gitignored).
+Only the IP changes per instance; the key path + secrets live in the single
+root `.env` (gitignored). `deploy.sh` writes the VM's own `~/shotbook/.env`
+from that file's `BVG_*`/`ANTHROPIC_API_KEY` lines.
 
 ## What runs where
 - **VM** (`tmux sb`): `renderer.main:app` on `:8004` — shot planning

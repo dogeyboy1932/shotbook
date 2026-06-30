@@ -1,4 +1,6 @@
+import { useState } from 'react'
 import type { ComposedScene, GenerationContext } from '../api'
+import type { RenderMode } from '../hooks/useUserPreferences'
 import LiveVideoPlayer from './LiveVideoPlayer'
 
 interface ContextPanelProps {
@@ -12,6 +14,8 @@ interface ContextPanelProps {
   videoStatus: string | null
   renderError: string | null
   hasSelection: boolean
+  renderMode: RenderMode
+  onSteer: (prompt: string) => void
 }
 
 export default function ContextPanel({
@@ -25,6 +29,8 @@ export default function ContextPanel({
   videoStatus,
   renderError,
   hasSelection,
+  renderMode,
+  onSteer,
 }: ContextPanelProps) {
   const showVideo = generating || streamUrl || videoUrl || renderError
   const hasContextData = contexts.length > 0 || Boolean(composedScene) || showVideo
@@ -106,14 +112,18 @@ export default function ContextPanel({
       </div>
 
       {showVideo && (
-        <div className="rounded-2xl border border-white/10 bg-slate-800/60 p-3">
+        <div className="space-y-3 rounded-2xl border border-white/10 bg-slate-800/60 p-3">
           <LiveVideoPlayer
             streamUrl={streamUrl}
             videoUrl={videoUrl}
             planning={generating}
             status={videoStatus}
             error={renderError}
+            mode={renderMode}
           />
+          {renderMode === 'realtime' && streamUrl && !videoUrl && !renderError && (
+            <SteerBox onSteer={onSteer} />
+          )}
         </div>
       )}
 
@@ -257,5 +267,51 @@ export default function ContextPanel({
         </div>
       )}
     </div>
+  )
+}
+
+/** Live steering (#5): type a change while a real-time render runs and the frames
+ *  morph toward it; leave it alone and they hold steady. Submitting empty clears. */
+function SteerBox({ onSteer }: { onSteer: (prompt: string) => void }) {
+  const [text, setText] = useState('')
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault()
+        onSteer(text.trim())
+      }}
+      className="rounded-2xl border border-emerald-400/30 bg-emerald-400/5 p-3"
+    >
+      <p className="text-xs font-semibold uppercase tracking-[0.25em] text-emerald-300/80">Steer the render</p>
+      <p className="mt-1 text-[12px] leading-5 text-slate-400">
+        Type a change (&ldquo;make it snow&rdquo;, &ldquo;push in closer&rdquo;) and the live frames morph toward it. Leave it be and they hold steady.
+      </p>
+      <div className="mt-2 flex gap-2">
+        <input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="add a detail…"
+          className="min-w-0 flex-1 rounded-lg border border-white/10 bg-slate-950/70 px-3 py-1.5 text-sm text-slate-200 outline-none transition focus:border-emerald-400/50"
+        />
+        <button
+          type="submit"
+          className="shrink-0 rounded-lg bg-emerald-400 px-3 py-1.5 text-sm font-medium text-slate-900 transition hover:bg-emerald-300"
+        >
+          Steer
+        </button>
+        {text && (
+          <button
+            type="button"
+            onClick={() => {
+              setText('')
+              onSteer('')
+            }}
+            className="shrink-0 rounded-lg border border-white/10 px-2 py-1.5 text-xs text-slate-300 transition hover:text-white"
+          >
+            clear
+          </button>
+        )}
+      </div>
+    </form>
   )
 }

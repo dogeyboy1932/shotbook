@@ -89,7 +89,7 @@ CREATE TABLE paragraphs (
     chapter_number        INTEGER NOT NULL,
     sequence_index         INTEGER NOT NULL,        -- global monotonic order of this paragraph within the book; THE timeline axis
     raw_text               TEXT NOT NULL,
-    active_location_id      BIGINT REFERENCES locations(location_id),
+    active_location_id      BIGINT REFERENCES locations(location_id) ON DELETE SET NULL,
     camera_framing           TEXT NOT NULL DEFAULT 'medium_shot'
                                 CHECK (camera_framing IN (
                                     'extreme_close_up', 'close_up', 'medium_shot',

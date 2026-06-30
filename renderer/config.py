@@ -13,6 +13,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class RendererSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_prefix="BVG_", extra="ignore")
 
+    # --- Streaming diffusion model (loaded once at renderer startup) ----------
+    # Quality vs speed knob -- the model variant the StreamingCF engine loads:
+    #   "chunkwise" -- 4-step, 3 frames/block, higher quality (default)
+    #   "fw2step"   -- 2-step, 1 frame/block, faster, lower quality
+    # To trial a larger/custom checkpoint, add it to the MODELS dict in
+    # renderer/vendor/cf_streaming.py and set BVG_RENDERER_MODEL to its key.
+    renderer_model: str = "chunkwise"
+
     # --- Claude shot planning (moved off the old FastAPI middle tier) ---------
     anthropic_api_key: str | None = Field(default=None, validation_alias="ANTHROPIC_API_KEY")
     claude_video_model: str = "claude-opus-4-8"

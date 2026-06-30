@@ -1,6 +1,16 @@
 """Driveable streaming generator for CAUSAL FORCING++ — FRAME-WISE 2-STEP variant,
 with SPEED (Spectral Progressive Diffusion) support.
 
+============================================================================
+SHOTBOOK NOVELTY ANCHOR — this file IS the real-time engine.
+The interactive, perceived-real-time video generation that makes ShotBook work
+is concentrated HERE: the `StreamingCF` autoregressive rollout, `ramp_to`
+(SLERP morph), `hardcut`, and the `PromptBus` live-steer channel. Adapted from
+the SPED reference (https://github.com/bryandong24/SPED) and gino's
+causal-forcing fork. See renderer/NOVELTY.md for the file-by-file map of what
+came from upstream vs. what ShotBook added.
+============================================================================
+
 Self-contained fork of gino/causal-forcing-fw2step: this repo VENDORS the model code
 (wan/, pipeline/, utils/, configs/) so SPEED's model-level edits live here without
 touching gino's shared Causal-Forcing repo. Weights (checkpoints/, wan_models/) are

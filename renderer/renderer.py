@@ -5,16 +5,17 @@ memory) and renders a ShotBook video plan -- a list of shots, each a fully
 assembled text-to-video prompt -- into one stitched mp4. This is the fast
 (~16-22 FPS on one H100) replacement for the 14B `generate_video.py` path.
 
-PoC scope (single GPU, stitched shots):
-  - each shot is rendered as an independent <=5s clip via the streaming loop
-    (`StreamingCF.start` -> `step` -> `decode_chunk`), exactly like the engine's
-    own smoke test in vendor/cf_streaming.py;
-  - shots are ffmpeg-concatenated into final_story.mp4 (same stitch step the old
-    generate_video.py did).
+Rendering model (single GPU, see stream_plan):
+  - shots are grouped into continuous SEGMENTS split at every 'cut_new_scene';
+  - each segment is ONE unbroken streaming rollout (`StreamingCF.start` ->
+    `step` -> `decode_chunk`), morphing across same-scene shot changes via
+    `ramp_to` so there is no seam within a scene;
+  - a 'cut_new_scene' starts a FRESH rollout (new noise + cleared KV/cross-attn/
+    VAE caches) = a genuine hard cut, not a morph;
+  - all decoded frames are written straight to final_story.mp4 (no ffmpeg stitch).
 
-Deferred (see PLAN.md): the 2-GPU DiT/VAE pipeline split, and rendering a whole
-scene as ONE unbroken stream via mid-generation prompt-swap (hardcut/ramp_to)
-driven by each shot's `continuity` field.
+Real-time engine + attribution: see vendor/cf_streaming.py and NOVELTY.md.
+Deferred (see PLAN.md): the 2-GPU DiT/VAE pipeline split.
 """
 from __future__ import annotations
 
@@ -54,6 +55,7 @@ class RenderEngine:
         self.seed = seed
         self._pipe = None
         self._StreamingCF = None
+        self._PromptBus = None
 
     @property
     def is_loaded(self) -> bool:
@@ -71,12 +73,21 @@ class RenderEngine:
             return
         if str(VENDOR_DIR) not in sys.path:
             sys.path.insert(0, str(VENDOR_DIR))
-        from cf_streaming import StreamingCF, load_cf_pipeline
+        from cf_streaming import PromptBus, StreamingCF, load_cf_pipeline
 
         t0 = time.time()
         self._pipe = load_cf_pipeline(model=self.model, window=self.window, sink=self.sink)
         self._StreamingCF = StreamingCF
+        self._PromptBus = PromptBus
         logger.info("renderer model %r loaded in %.1fs", self.model, time.time() - t0)
+
+    def new_bus(self):
+        """A thread-safe live-prompt bus for steering a running stream_plan (#5).
+        The frontend POSTs steer text to /jobs/{id}/steer -> bus.set(text); the
+        render loop picks it up at the next chunk boundary."""
+        if self._PromptBus is None:
+            raise RuntimeError("engine not loaded")
+        return self._PromptBus("")
 
     def _render_shot(self, prompt: str, seconds: float, out_path: Path) -> int:
         """Stream one shot to an mp4; returns the pixel-frame count."""
@@ -111,19 +122,30 @@ class RenderEngine:
         return final, count
 
     def stream_plan(self, shots: list[dict], out_dir: str,
-                    seconds_per_shot: float = DEFAULT_SECONDS_PER_SHOT):
-        """Generator: render a whole passage as ONE unbroken autoregressive
-        rollout, yielding each decoded pixel frame live as it is produced, then
-        writing the continuous final_story.mp4.
+                    seconds_per_shot: float = DEFAULT_SECONDS_PER_SHOT, bus=None):
+        """Generator: render a passage live, yielding each decoded pixel frame as
+        it is produced, then writing the final_story.mp4.
 
-        This is the seamless, non-stitched path. Instead of a fresh rollout per
-        shot (which leaves a visible seam at every cut), we start a SINGLE
-        rollout sized for all shots and TRANSITION the prompt at each shot
-        boundary while the KV-cache carries the visual state forward -- the
-        engine's own hardcut/ramp_to pattern (cf_streaming.py __main__):
-          - continuity 'cut_new_scene' -> hardcut(prompt)  (swap conditioning)
-          - anything else              -> ramp_to(prompt)  (smooth SLERP morph)
-        so frames flow one into the next with no stitch.
+        Live steering (#5): if a PromptBus `bus` is given, the user's typed steer
+        text is appended to the active shot prompt and SLERP-morphed in whenever
+        the bus version changes (and morphed back out when cleared). When the
+        user is not typing the bus version is steady, so nothing changes -- the
+        passage just renders its planned shots.
+
+        The planner's `continuity` field decides the texture of every shot
+        boundary, and we honour it two different ways:
+          - within a continuous scene ('continuous_frame' / 'cut_same_scene')
+            we keep ONE rollout and SLERP-morph the prompt with ramp_to, so the
+            take flows unbroken with no stitch/seam;
+          - at a genuine scene break ('cut_new_scene') we do a REAL hard cut by
+            starting a FRESH rollout for the next segment -- new noise, cleared
+            KV self-attention + cross-attention + VAE caches -- so the new scene
+            is visually independent and does not morph out of the old one
+            (narrator's face -> a separate insert of the vulture eye, etc).
+
+        So the shots are partitioned into continuous SEGMENTS at every
+        cut_new_scene; each segment is its own morphing rollout, and the
+        segments are concatenated into the saved mp4.
         """
         if not shots:
             raise ValueError("stream_plan requires at least one shot")
@@ -133,55 +155,84 @@ class RenderEngine:
         gen = self._StreamingCF(self._pipe, seed=self.seed, window=self.window, sink=self.sink)
         nfpb = gen.nfpb
 
-        # Per-shot latent-frame budgets (snapped to whole chunks), summed into one
-        # continuous rollout length.
+        # Per-shot latent-frame budgets (snapped to whole chunks).
         budgets: list[int] = []
-        for shot in shots:
+        for _shot in shots:
             lf = max(nfpb, int(round(seconds_per_shot * LATENT_FPS)))
             lf -= lf % nfpb
             budgets.append(lf)
-        total = sum(budgets)
 
         prompts = [s.get("prompt") for s in shots]
         if not prompts[0]:
             raise ValueError("shot 0 has no prompt")
 
-        # latent-frame index where each later shot begins -> (prompt, continuity)
-        boundaries: dict[int, tuple[str, str]] = {}
-        acc = 0
-        for i in range(1, len(shots)):
-            acc += budgets[i - 1]
-            if prompts[i]:
-                boundaries[acc] = (prompts[i], (shots[i].get("continuity") or "").lower())
+        # Partition shot indices into continuous segments. A 'cut_new_scene'
+        # (and always shot 0) opens a new segment -> a fresh rollout = hard cut.
+        segments: list[list[int]] = []
+        for i, shot in enumerate(shots):
+            is_cut = i == 0 or (shot.get("continuity") or "").lower() == "cut_new_scene"
+            if is_cut or not segments:
+                segments.append([i])
+            else:
+                segments[-1].append(i)
 
-        gen.start(prompts[0], total_frames=total)
-        self._pipe.vae.model.clear_cache()
+        # Live-steer state persists ACROSS hard cuts: a user modifier ("make it
+        # snow") stays applied to every subsequent scene until they change it.
+        steer_text = ""
+        last_steer_version = 0
 
         all_frames: list[np.ndarray] = []
-        produced = 0
-        for _ in range(total // nfpb):
-            if produced in boundaries:           # entering a new shot -> transition prompt
-                new_prompt, continuity = boundaries[produced]
-                # A single rollout is one continuously-morphing shot: the KV-cache
-                # keeps the picture flowing, so a hardcut to an UNRELATED prompt
-                # doesn't cut -- it hallucinates the new prompt into the old frame.
-                # For seamlessness we always SLERP-morph; a brisker ramp for a
-                # declared scene change, a gentler one to hold continuity.
-                k = 4 if continuity == "cut_new_scene" else 8
-                gen.ramp_to(new_prompt, k=k)
-            den = gen.step()                     # DiT denoise -> clean latents
-            chunk = gen.decode_chunk(den)        # VAE decode -> uint8 [nf,H,W,3]
-            produced += nfpb
-            for frame in chunk:
-                all_frames.append(frame)
-                yield frame
+        for segment in segments:
+            seg_total = sum(budgets[i] for i in segment)
+            if not prompts[segment[0]]:           # skip a malformed promptless segment head
+                continue
+
+            # latent-frame index WITHIN this segment -> the ramp prompt for an
+            # internal (same-scene) shot change.
+            seg_boundaries: dict[int, str] = {}
+            acc = 0
+            for j, i in enumerate(segment[1:], start=1):
+                acc += budgets[segment[j - 1]]
+                if prompts[i]:
+                    seg_boundaries[acc] = prompts[i]
+
+            gen.start(prompts[segment[0]], total_frames=seg_total)  # fresh rollout = hard cut
+            self._pipe.vae.model.clear_cache()
+            active_base = prompts[segment[0]]
+            if steer_text:                        # carry an active steer into the new scene
+                gen.ramp_to(_steer_prompt(active_base, steer_text), k=4)
+
+            produced = 0
+            for _ in range(seg_total // nfpb):
+                if produced in seg_boundaries:    # same-scene shot change -> smooth morph
+                    active_base = seg_boundaries[produced]
+                    gen.ramp_to(_steer_prompt(active_base, steer_text), k=8)
+                elif bus is not None:             # user steer -> morph toward it (faster)
+                    steer, version = bus.get()
+                    if version != last_steer_version:
+                        last_steer_version = version
+                        steer_text = steer
+                        gen.ramp_to(_steer_prompt(active_base, steer_text), k=4)
+                den = gen.step()                  # DiT denoise -> clean latents
+                chunk = gen.decode_chunk(den)     # VAE decode -> uint8 [nf,H,W,3]
+                produced += nfpb
+                for frame in chunk:
+                    all_frames.append(frame)
+                    yield frame
 
         if all_frames:
             final = out / "final_story.mp4"
             imageio.mimwrite(str(final), np.stack(all_frames), fps=FPS,
                              codec="libx264", macro_block_size=1)
-            logger.info("saved seamless render -> %s (%d frames, %d shots)",
-                        final, len(all_frames), len(shots))
+            logger.info("saved render -> %s (%d frames, %d shots, %d segments)",
+                        final, len(all_frames), len(shots), len(segments))
+
+
+def _steer_prompt(base: str, steer: str) -> str:
+    """Combine the active planned shot prompt with the user's live steer text
+    (#5). Empty steer -> the unmodified planned prompt (steady state)."""
+    steer = (steer or "").strip()
+    return f"{base} {steer}" if steer else base
 
 
 def _ffmpeg_concat(clips: list[Path], final: Path) -> None:

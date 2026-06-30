@@ -38,7 +38,7 @@ There is **no middle API tier** — the browser talks only to Supabase and the V
 
 1. **Database** — apply `supabase/` once (see `supabase/README.md`).
 2. **GPU** — `scripts/deploy.sh <VM_IP>` brings up the renderer, tunnel, and frontend
-   end-to-end. Config lives in `scripts/deploy.config` (see `scripts/DEPLOY.md`).
+   end-to-end. All config lives in a single root `.env` (copy `.env.example`; see `scripts/DEPLOY.md`).
 3. **Use it** — open http://localhost:5173 → **Add story** (.txt/.pdf) or open one →
    highlight → **Query** → **Generate**.
 

@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { api, previewSceneFromContexts, videoStreamUrl, type ComposedScene, type GenerationContext, type Paragraph, type SavedClip } from '../api'
 import ContextPanel from '../components/ContextPanel'
 import SavedClips from '../components/SavedClips'
+import { useUserPreferences, type RenderMode } from '../hooks/useUserPreferences'
 import { clearHighlights, highlightRangeAcrossParagraphs } from '../lib/highlight'
 
 const PARAGRAPHS_PER_PAGE = 4
@@ -36,6 +37,9 @@ export default function Reader() {
   const [videoUrl, setVideoUrl] = useState<string | null>(null)
   const [videoStatus, setVideoStatus] = useState<string | null>(null)
   const [renderError, setRenderError] = useState<string | null>(null)
+  const [jobId, setJobId] = useState<string | null>(null)
+
+  const { prefs, setRenderMode } = useUserPreferences()
 
   const [savedClips, setSavedClips] = useState<SavedClip[]>([])
 
@@ -112,7 +116,15 @@ export default function Reader() {
     setVideoUrl(null)
     setVideoStatus(null)
     setRenderError(null)
+    setJobId(null)
   }, [])
+
+  // Live-steer the running render (#5). Fire-and-forget; a failed steer just
+  // means the frames keep following the planned shots.
+  const handleSteer = useCallback((prompt: string) => {
+    if (!jobId) return
+    api.steerGeneration(jobId, prompt).catch(() => { /* non-fatal */ })
+  }, [jobId])
 
   const goToPage = useCallback(
     (next: number) => {
@@ -239,6 +251,9 @@ export default function Reader() {
       //    preview in place when the real shot plan lands.
       const { scene, job_id } = await api.generateVideo(selectedParagraphIds, ctx)
       setComposedScene(scene)
+      setJobId(job_id)
+      // Open the stream regardless of mode -- the MJPEG request is what drives
+      // the GPU render; 'finished' mode just hides the frames (see LiveVideoPlayer).
       setStreamUrl(videoStreamUrl(job_id))
       setVideoStatus('planned')
       startJobPoll(job_id, clipLabel(scene), scene)
@@ -363,6 +378,31 @@ export default function Reader() {
             </p>
           </div>
 
+          <div className="mb-4 flex items-center justify-between gap-2">
+            <span className="text-xs font-semibold uppercase tracking-[0.25em] text-slate-500">Output</span>
+            <div className="inline-flex rounded-xl border border-white/10 bg-slate-800/70 p-0.5">
+              {([
+                ['realtime', 'Real-time frames'],
+                ['finished', 'Finished video'],
+              ] as [RenderMode, string][]).map(([m, label]) => (
+                <button
+                  key={m}
+                  onClick={() => setRenderMode(m)}
+                  title={
+                    m === 'realtime'
+                      ? 'Watch frames generate live (and steer them as they render)'
+                      : 'Hide the live frames; show only the completed video'
+                  }
+                  className={`rounded-lg px-3 py-1 text-xs font-medium transition ${
+                    prefs.renderMode === m ? 'bg-amber-400 text-slate-900' : 'text-slate-300 hover:text-white'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div className="mb-4 flex flex-wrap gap-2">
             <button
               onClick={handleQuery}
@@ -401,6 +441,8 @@ export default function Reader() {
             videoStatus={videoStatus}
             renderError={renderError}
             hasSelection={selectedParagraphIds.length > 0}
+            renderMode={prefs.renderMode}
+            onSteer={handleSteer}
           />
 
           <SavedClips clips={savedClips} onRemove={removeClip} />
