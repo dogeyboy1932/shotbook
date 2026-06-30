@@ -152,6 +152,15 @@ each held in a distinct part of the frame, instead of cutting between \
 individual close-ups. Only let the primary on-screen character change at a \
 genuine 'cut_new_scene'. When in doubt, use one shot.
 
+GROUND EVERY SHOT IN THE HIGHLIGHTED PASSAGE. Depict what THESE exact sentences \
+describe -- the specific images, objects, gazes, faces, and reactions the reader \
+selected -- not the wider chapter. If the passage dwells on a single vivid image \
+(an eye, a hand, an object, a facial reaction), make THAT image the subject of \
+the shot. The character/setting references and the "wider scene context" you are \
+given are only there to tell you how people and places LOOK and what stays \
+continuous; they must never replace what the highlighted lines literally say is \
+happening. Read the passage and ask: what would a reader actually picture here?
+
 For each shot, write these fields:
 - camera: the shot type and camera angle/movement only, e.g. "Cinematic wide \
 low-angle establishing shot, the camera slowly pushing in."
@@ -216,26 +225,37 @@ class ShotBreakdown(BaseModel):
 
 
 def _format_scene_for_llm(scene: ComposedScenePayload) -> str:
-    lines: list[str] = [f"Passage text:\n{scene.selected_text}", ""]
+    # The highlighted passage is THE subject -- everything else is reference so the
+    # planner knows how things look and what stays continuous, not what to depict.
+    lines: list[str] = [
+        "HIGHLIGHTED PASSAGE -- this is exactly what to visualise:",
+        scene.selected_text,
+        "",
+        "--- Reference only (how things look / continuity; do NOT treat as the thing to depict) ---",
+    ]
 
     if scene.location is not None:
-        location_line = f"Location: {scene.location.name} -- {scene.location.visual_description}"
+        location_line = f"Setting looks like -- {scene.location.name}: {scene.location.visual_description}"
         if scene.location.lighting_state:
             location_line += f" Lighting: {scene.location.lighting_state}."
         lines.append(location_line)
 
     for character in scene.characters:
-        bit = f"Character {character.name}: {character.visual_description}"
+        bit = f"{character.name} looks like -- {character.visual_description}"
         if character.emotional_state:
-            bit += f" Currently: {character.emotional_state}."
+            bit += f" Current state: {character.emotional_state}."
         lines.append(bit)
 
     if scene.dialogue_script:
         speaking = ", ".join(sorted({line.character_name for line in scene.dialogue_script}))
-        lines.append(f"Characters speaking on screen during this span: {speaking}.")
+        lines.append(f"Characters speaking during this span: {speaking}.")
 
-    lines.append(f"Camera framing established by the text: {scene.camera_framing.replace('_', ' ')}")
-    lines.append(f"Action across this span: {scene.action_summary}")
+    lines.append(f"Suggested camera framing: {scene.camera_framing.replace('_', ' ')}")
+    lines.append(
+        "Wider scene context (BACKGROUND ONLY -- this describes the surrounding chapter and "
+        "usually extends beyond the highlighted lines; do not depict it unless the highlighted "
+        f"passage itself does): {scene.action_summary}"
+    )
     return "\n".join(lines)
 
 

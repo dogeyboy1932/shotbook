@@ -207,7 +207,10 @@ export default function Reader() {
           pollRef.current = setTimeout(poll, 1500)
         }
       } catch (err) {
+        // Job vanished (e.g. renderer restarted) or network blip -- surface it and
+        // free the Generate button instead of leaving it stuck on "Rendering…".
         setRenderError(String(err))
+        setStreamUrl(null)
       }
     }
     pollRef.current = setTimeout(poll, 1500)
