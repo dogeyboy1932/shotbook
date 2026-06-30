@@ -61,6 +61,9 @@ class LLMExtractionPool:
         transient API errors and schema-validation failures, up to
         `settings.ingest_max_retries`; raises `LLMExtractionError` on final
         failure so the orchestrator can skip the chunk."""
+        # `temperature` is accepted in the signature for back-compat but NOT sent:
+        # the newest Claude models (e.g. claude-opus-4-8) reject it as deprecated.
+        _ = temperature
         last_error: Exception | None = None
         for attempt in range(1, settings.ingest_max_retries + 1):
             try:
@@ -68,7 +71,6 @@ class LLMExtractionPool:
                     response = await self._client.messages.parse(
                         model=self._model,
                         max_tokens=max_tokens,
-                        temperature=temperature,
                         system=system_prompt,
                         messages=[{"role": "user", "content": user_prompt}],
                         output_format=response_schema,
