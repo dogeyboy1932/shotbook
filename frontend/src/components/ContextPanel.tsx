@@ -94,11 +94,6 @@ export default function ContextPanel({
                   <p>
                     <span className="font-medium text-slate-200">Action:</span> {ctx.action_summary}
                   </p>
-                  {ctx.narrative_context && (
-                    <p>
-                      <span className="font-medium text-slate-200">Narrative:</span> {ctx.narrative_context}
-                    </p>
-                  )}
                 </div>
               </details>
             ))
@@ -161,9 +156,7 @@ export default function ContextPanel({
               <p>
                 <span className="font-medium text-slate-200">Action:</span> {composedScene.action_summary}
               </p>
-              <p>
-                <span className="font-medium text-slate-200">Audio prompt:</span> {composedScene.audio_prompt}
-              </p>
+              {/* AUDIO PAUSED: audio prompt hidden — video quality + interactivity focus. */}
             </div>
           </details>
 
