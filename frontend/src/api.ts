@@ -61,7 +61,8 @@ export interface GenerationContext {
   location: LocationContext | null
   dialogue_script: DialogueLine[]
   sfx_prompts: string[]
-  narrative_context: string
+  // Dropped by the Supabase resolve_contexts RPC; the UI renders structured fields.
+  narrative_context?: string
 }
 
 export interface VideoShot {
@@ -143,45 +144,45 @@ export interface VideoJob {
   error: string | null
 }
 
+// Resolve a highlighted span's full Tier-1/Tier-2 state via the Supabase RPC.
+const resolveContexts = (paragraphIds: number[]) =>
+  request<GenerationContext[]>('/rest/v1/rpc/resolve_contexts', {
+    method: 'POST',
+    body: JSON.stringify({ p_paragraph_ids: paragraphIds }),
+  })
+
 export const api = {
-  listBooks: () => {
-    if (SUPABASE_URL && SUPABASE_ANON_KEY) {
-      return request<BookSummary[]>('/rest/v1/books?select=book_id,title,author,ingestion_status&order=book_id.asc')
-    }
-    return request<BookSummary[]>('/api/books')
+  // Book + page data straight from Supabase REST.
+  listBooks: () =>
+    request<BookSummary[]>('/rest/v1/books?select=book_id,title,author,ingestion_status&order=book_id.asc'),
+
+  listParagraphs: (bookId: number) =>
+    request<Paragraph[]>(
+      `/rest/v1/paragraphs?select=paragraph_id,sequence_index,chapter_number,raw_text&book_id=eq.${bookId}&order=sequence_index.asc`,
+    ),
+
+  // "Query" — resolve story state directly from Supabase.
+  queryContext: resolveContexts,
+
+  // "Generate" — resolve contexts (Supabase) then hand them to the VM to plan
+  // shots + render. The VM owns planning now (no FastAPI middle tier).
+  generateVideo: async (paragraphIds: number[]) => {
+    const contexts = await resolveContexts(paragraphIds)
+    return request<GenerateVideoResponse>('/generate', {
+      method: 'POST',
+      body: JSON.stringify({ contexts }),
+    })
   },
 
-  listParagraphs: (bookId: number) => {
-    if (SUPABASE_URL && SUPABASE_ANON_KEY) {
-      return request<Paragraph[]>(
-        `/rest/v1/paragraphs?select=paragraph_id,sequence_index,chapter_number,raw_text&book_id=eq.${bookId}&order=sequence_index.asc`,
-      )
-    }
-    return request<Paragraph[]>(`/api/books/${bookId}/paragraphs`)
+  // Poll the VM render job; absolutize the VM-relative URLs it returns.
+  getVideoJob: async (jobId: string): Promise<VideoJob> => {
+    const job = await request<VideoJob>(`/jobs/${jobId}`)
+    const abs = (u: string | null) => (u ? `${VM_BASE_URL || API_BASE_URL}${u}` : null)
+    return { ...job, video_url: abs(job.video_url), stream_url: abs(job.stream_url) }
   },
-
-  queryContext: (paragraphIds: number[]) =>
-    request<GenerationContext[]>('/api/generate-context/batch', {
-      method: 'POST',
-      body: JSON.stringify({ paragraph_ids: paragraphIds }),
-    }),
-
-  composeScene: (paragraphIds: number[]) =>
-    request<ComposedScene>('/api/compose-scene', {
-      method: 'POST',
-      body: JSON.stringify({ paragraph_ids: paragraphIds }),
-    }),
-
-  generateVideo: (paragraphIds: number[]) =>
-    request<GenerateVideoResponse>('/api/generate-video', {
-      method: 'POST',
-      body: JSON.stringify({ paragraph_ids: paragraphIds }),
-    }),
-
-  getVideoJob: (jobId: string) => request<VideoJob>(`/api/video-jobs/${jobId}`),
 }
 
-/** Build the live MJPEG stream URL for a render job. */
+/** Build the live MJPEG stream URL (VM) for a render job. */
 export function videoStreamUrl(jobId: string): string {
-  return `${VM_BASE_URL || API_BASE_URL}/api/video-jobs/${jobId}/stream`
+  return `${VM_BASE_URL || API_BASE_URL}/jobs/${jobId}/stream`
 }
