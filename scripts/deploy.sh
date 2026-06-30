@@ -102,30 +102,29 @@ else
 fi
 REMOTE
 
-say "4/6 starting backend :8080 + fast renderer :8004 + HD 5B :8005 (tmux 'sb')"
+say "4/6 starting the renderer :8004 (plan + render — the only VM service)"
 "${SSH[@]}" "$HOST" "bash -s" <<REMOTE
 set -e
 cd "$RDIR"
 tmux kill-session -t sb 2>/dev/null || true
-tmux new-session -d -s sb -n backend  "cd $RDIR; set -a; . ./.env; set +a; PYTHONPATH=. .venv-api/bin/uvicorn app.main:app --host 0.0.0.0 --port 8080 > ~/backend.log 2>&1"
-tmux new-window  -t sb -n renderer "cd $RDIR; CUDA_VISIBLE_DEVICES=0 .venv-renderer/bin/uvicorn services.renderer.main:app --host 0.0.0.0 --port 8004 > ~/renderer.log 2>&1"
-tmux new-window  -t sb -n quality  "cd $RDIR; CUDA_VISIBLE_DEVICES=0 .venv-quality/bin/uvicorn services.renderer.quality_main:app --host 0.0.0.0 --port 8005 > ~/quality.log 2>&1"
-for svc in "fast 1.3B renderer:8004" "HD 5B renderer:8005"; do
-  name=\${svc%:*}; port=\${svc##*:}
-  printf "   waiting for %s to warm-load" "\$name"
-  for i in \$(seq 1 90); do
-    if curl -s -m5 http://localhost:\$port/health 2>/dev/null | grep -q '"loaded":true'; then echo " ready"; break; fi
-    printf "."; sleep 5
-  done
+# One service: the renderer now owns Claude planning too, so the React app talks
+# only to Supabase + this. .env is sourced for ANTHROPIC_API_KEY (planning).
+tmux new-session -d -s sb -n renderer "cd $RDIR; set -a; . ./.env; set +a; CUDA_VISIBLE_DEVICES=0 .venv-renderer/bin/uvicorn services.renderer.main:app --host 0.0.0.0 --port 8004 > ~/renderer.log 2>&1"
+printf "   waiting for the renderer to warm-load the model"
+for i in \$(seq 1 90); do
+  if curl -s -m5 http://localhost:8004/health 2>/dev/null | grep -q '"loaded":true'; then echo " ready"; break; fi
+  printf "."; sleep 5
 done
-echo -n "   backend books API: "; curl -s -m15 http://localhost:8080/api/books | head -c 120; echo
+curl -s -m6 http://localhost:8004/health; echo
 REMOTE
 
-say "5/6 opening local tunnel + frontend"
-pkill -f "$LOCAL_PORT:localhost:8080" 2>/dev/null || true
+say "5/6 opening local tunnel (VM :8004) + frontend"
+# The browser calls the VM renderer directly at localhost:8004 (VITE_VM_BASE_URL),
+# so tunnel that port. Book/state data goes straight to Supabase (no tunnel).
+pkill -f "8004:localhost:8004" 2>/dev/null || true
 ssh -fN -o ServerAliveInterval=30 -o ExitOnForwardFailure=yes \
-    -L "$LOCAL_PORT:localhost:8080" -p "$VM_PORT" -i "$KEYLINK" "$HOST"
-echo "   tunnel up: localhost:$LOCAL_PORT -> VM backend"
+    -L "8004:localhost:8004" -p "$VM_PORT" -i "$KEYLINK" "$HOST"
+echo "   tunnel up: localhost:8004 -> VM renderer"
 if [ -d "$REPO/frontend/node_modules" ]; then
   ( cd "$REPO/frontend" && nohup npm run dev > /tmp/shotbook-vite.log 2>&1 & )
   echo "   frontend starting (log: /tmp/shotbook-vite.log)"
@@ -137,10 +136,12 @@ say "6/6 READY"
 cat <<DONE
 
   Open:  http://localhost:5173
+  (frontend/.env.local needs VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY,
+   VITE_VM_BASE_URL=http://localhost:8004)
 
-  VM services:   tmux 'sb' on $HOST  (backend + renderer)
+  VM service:   tmux 'sb' on $HOST  (renderer :8004 — plan + render)
   Stop laptop side later:
-     pkill -f "$LOCAL_PORT:localhost:8080"   # tunnel
-     pkill -f vite                           # frontend
-  Stop GPU spend: terminate the Primetime instance.
+     pkill -f "8004:localhost:8004"   # tunnel
+     pkill -f vite                    # frontend
+  Stop GPU spend: terminate the instance.
 DONE

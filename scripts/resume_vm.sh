@@ -28,13 +28,13 @@ echo "    wrote $HOME/supabase_ca.pem ($(grep -c 'BEGIN CERT' "$HOME/supabase_ca
 
 PT="--index-url https://download.pytorch.org/whl/cu121"
 
-echo "==> [1/3] backend venv (.venv-api)"
+echo "==> [1/2] ingestion venv (.venv-api) -- Claude ingestion -> Supabase (no FastAPI)"
 python3 -m venv .venv-api && . .venv-api/bin/activate && pip install -q -U pip
-pip install -q "fastapi>=0.111" "uvicorn[standard]>=0.29" "sqlalchemy[asyncio]>=2.0" \
-  asyncpg "pydantic>=2" pydantic-settings anthropic httpx
+pip install -q "sqlalchemy[asyncio]>=2.0" asyncpg "pydantic>=2" pydantic-settings anthropic tqdm
 deactivate
 
-echo "==> [2/3] fast 1.3B streaming renderer venv (.venv-renderer) + flash-attn wheel + weights"
+echo "==> [2/2] streaming renderer venv (.venv-renderer) + flash-attn wheel + weights"
+echo "    (also installs anthropic + pydantic-settings for on-VM Claude shot planning)"
 python3 -m venv .venv-renderer && . .venv-renderer/bin/activate && pip install -q -U pip
 pip install -q torch==2.5.1 torchvision==0.20.1 $PT
 pip install -q -r services/renderer/requirements.txt
@@ -49,26 +49,15 @@ hf_hub_download("zhuhz22/Causal-Forcing", "chunkwise/causal_forcing.pt",
 PY
 deactivate
 
-echo "==> [3/3] quality 5B venv (.venv-quality, newer diffusers) + weights"
-python3 -m venv .venv-quality && . .venv-quality/bin/activate && pip install -q -U pip
-pip install -q torch==2.5.1 torchvision==0.20.1 $PT
-# fastapi/uvicorn so the 5B can run as the warm HD renderer service (port 8005).
-pip install -q -U diffusers transformers accelerate ftfy imageio imageio-ffmpeg "numpy<2" \
-  safetensors sentencepiece "fastapi>=0.111" "uvicorn[standard]>=0.29"
-python - <<'PY'
-from huggingface_hub import snapshot_download
-snapshot_download("Wan-AI/Wan2.2-TI2V-5B-Diffusers",
-                  local_dir="wan_models/Wan2.2-TI2V-5B-Diffusers", max_workers=8)
-PY
-deactivate
-
 echo ""
 echo "==> RESUME COMPLETE. Make sure ~/shotbook/.env exists with:"
 echo "      BVG_DATABASE_URL=postgresql+asyncpg://postgres.<ref>:<pw>@aws-1-us-east-1.pooler.supabase.com:5432/postgres"
 echo "      BVG_DB_SSL_CA=$HOME/supabase_ca.pem"
-echo "      ANTHROPIC_API_KEY=sk-ant-..."
-echo "  Then start the three services in tmux (backend + fast 1.3B + HD 5B):"
+echo "      ANTHROPIC_API_KEY=sk-ant-...   (used for shot planning AND ingestion)"
+echo "  Start the single VM service in tmux (renderer = plan + render, port 8004):"
 echo "      tmux new -s sb"
-echo "      PYTHONPATH=. .venv-api/bin/uvicorn app.main:app --host 0.0.0.0 --port 8080"
+echo "      set -a; . ./.env; set +a"
 echo "      CUDA_VISIBLE_DEVICES=0 .venv-renderer/bin/uvicorn services.renderer.main:app --host 0.0.0.0 --port 8004"
-echo "      CUDA_VISIBLE_DEVICES=0 .venv-quality/bin/uvicorn services.renderer.quality_main:app --host 0.0.0.0 --port 8005"
+echo "  Ingest a new story (writes to Supabase):"
+echo "      set -a; . ./.env; set +a"
+echo "      PYTHONPATH=. .venv-api/bin/python -m ingestion.orchestrator <book.txt> --title '...' --author '...'"
