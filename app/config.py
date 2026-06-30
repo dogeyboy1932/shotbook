@@ -70,6 +70,11 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = Field(default=None, validation_alias="ANTHROPIC_API_KEY")
     claude_video_model: str = "claude-opus-4-8"
 
+    # --- Book ingestion via Claude (replaces the old vLLM fleet) -----------
+    claude_ingest_model: str = "claude-opus-4-8"
+    ingest_concurrency: int = 4          # max in-flight Claude extraction calls
+    ingest_max_retries: int = 3
+
     # --- Renderer service (services/renderer) ------------------------------
     # The fast streaming video renderer (Wan2.1-1.3B / Causal-Forcing) runs as a
     # separate warm microservice in its own venv. video_jobs.py POSTs the planned
