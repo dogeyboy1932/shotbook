@@ -77,7 +77,9 @@ export interface VideoShot {
 
 export interface VideoWorld {
   characters: Record<string, string>
+  character_status: Record<string, string>
   location: string | null
+  atmosphere: string | null
   look: string
 }
 

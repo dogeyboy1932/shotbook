@@ -224,9 +224,14 @@ def _format_scene_for_llm(scene: ComposedScenePayload) -> str:
 
 
 def _build_world(scene: ComposedScenePayload) -> VideoWorldPayload:
+    """Assemble the fixed anchors from the resolved state -- appearance AND the
+    current Tier-2 deltas (emotional status per character, lighting/atmosphere
+    for the setting) -- so every shot is grounded in the full world-state."""
     return VideoWorldPayload(
         characters={c.name: c.visual_description for c in scene.characters},
+        character_status={c.name: c.emotional_state for c in scene.characters if c.emotional_state},
         location=scene.location.visual_description if scene.location else None,
+        atmosphere=(scene.location.lighting_state if scene.location else None),
         look=settings.video_style_suffix,
     )
 
@@ -249,12 +254,17 @@ _CONTINUITY_NOTES = {
 
 def _build_prompt(*, camera: str, action: str, light: str, continuity: str, world: VideoWorldPayload) -> str:
     parts: list[str] = [camera, "Part of one continuous cinematic sequence.", action]
-    parts.extend(
-        f"This is the same individual {name} in every shot -- {description}."
-        for name, description in world.characters.items()
-    )
+    for name, description in world.characters.items():
+        line = f"This is the same individual {name} in every shot -- {description}."
+        status = world.character_status.get(name)
+        if status:
+            line += f" Right now {name} is {status}."
+        parts.append(line)
     if world.location:
-        parts.append(f"The setting stays the same throughout -- {world.location}.")
+        loc = f"The setting stays the same throughout -- {world.location}."
+        if world.atmosphere:
+            loc += f" The setting's current atmosphere: {world.atmosphere}."
+        parts.append(loc)
     parts.append(light)
     parts.append(_CONTINUITY_NOTES[continuity])
     parts.append(world.look)

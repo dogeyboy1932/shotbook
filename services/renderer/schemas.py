@@ -62,11 +62,20 @@ class GenerationContextPayload(BaseModel):
 
 
 class VideoWorldPayload(BaseModel):
-    """Fixed, scene-wide identity anchors spliced verbatim into every shot's
-    prompt so appearance/setting/style never drift between shots."""
+    """Scene-wide anchors spliced verbatim into every shot's prompt so the full
+    resolved world-state -- identity AND current status -- is grounded in each
+    clip, and never drifts between shots.
+
+    - characters: name -> appearance (baseline + the active appearance delta)
+    - character_status: name -> current emotional/physical status (Tier-2 delta)
+    - location: setting appearance (baseline + active atmosphere delta)
+    - atmosphere: the setting's current lighting/mood (Tier-2 location delta)
+    """
 
     characters: dict[str, str]
+    character_status: dict[str, str] = {}
     location: str | None
+    atmosphere: str | None = None
     look: str
 
 

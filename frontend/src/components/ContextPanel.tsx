@@ -170,12 +170,18 @@ export default function ContextPanel({
                   {Object.entries(composedScene.video.world.characters).map(([name, desc]) => (
                     <p key={name}>
                       <span className="font-medium text-slate-200">{name}:</span> {desc}
+                      {composedScene.video!.world.character_status?.[name] && (
+                        <span className="text-amber-300/90"> — status: {composedScene.video!.world.character_status[name]}</span>
+                      )}
                     </p>
                   ))}
                   {composedScene.video.world.location && (
                     <p>
                       <span className="font-medium text-slate-200">location:</span>{' '}
                       {composedScene.video.world.location}
+                      {composedScene.video.world.atmosphere && (
+                        <span className="text-amber-300/90"> — atmosphere: {composedScene.video.world.atmosphere}</span>
+                      )}
                     </p>
                   )}
                   <p>
