@@ -98,79 +98,90 @@ class RenderEngine:
     def render_plan(
         self, shots: list[dict], out_dir: str, seconds_per_shot: float = DEFAULT_SECONDS_PER_SHOT
     ) -> tuple[Path, int]:
-        """Render every shot, stitch into final_story.mp4. Returns (path, total_frames)."""
-        if not shots:
-            raise ValueError("render_plan requires at least one shot")
-        out = Path(out_dir).resolve()
-        out.mkdir(parents=True, exist_ok=True)
+        """Render the whole passage as ONE seamless rollout; save final_story.mp4.
 
-        shot_files: list[Path] = []
-        total_frames = 0
-        for i, shot in enumerate(shots):
-            prompt = shot.get("prompt")
-            if not prompt:
-                raise ValueError(f"shot {i} has no prompt")
-            slug = (shot.get("shot_id") or f"{i + 1:02d}").replace(" ", "_")
-            shot_path = out / f"shot_{i:02d}_{slug}.mp4"
-            n = self._render_shot(prompt, seconds_per_shot, shot_path)
-            total_frames += n
-            # Smooth the motion per-shot (before stitching, so cuts aren't interpolated across).
-            if INTERP_FPS:
-                smooth = out / f"shot_{i:02d}_{slug}_smooth.mp4"
-                _interpolate(shot_path, smooth, INTERP_FPS)
-                shot_files.append(smooth)
-            else:
-                shot_files.append(shot_path)
-            logger.info("shot %d/%d %r: %d frames%s -> %s", i + 1, len(shots), slug, n,
-                        f" (interp->{INTERP_FPS}fps)" if INTERP_FPS else "", shot_path.name)
-
-        final = out / "final_story.mp4"
-        if len(shot_files) == 1:
-            shutil.copy(shot_files[0], final)
-        else:
-            _ffmpeg_concat(shot_files, final)
-        logger.info("stitched %d shot(s) -> %s", len(shot_files), final)
-        return final, total_frames
+        Delegates to stream_plan (the single continuous rollout) and drains it,
+        so the saved mp4 is exactly what the live stream shows -- no per-shot
+        clips, no ffmpeg stitch, no seams.
+        """
+        count = 0
+        for _ in self.stream_plan(shots, out_dir, seconds_per_shot):
+            count += 1
+        final = Path(out_dir).resolve() / "final_story.mp4"
+        return final, count
 
     def stream_plan(self, shots: list[dict], out_dir: str,
                     seconds_per_shot: float = DEFAULT_SECONDS_PER_SHOT):
-        """Generator: yield each decoded pixel frame (uint8 HxWx3 RGB) live as it
-        is produced across all shots, then write final_story.mp4 so the finished
-        clip is still saved.
+        """Generator: render a whole passage as ONE unbroken autoregressive
+        rollout, yielding each decoded pixel frame live as it is produced, then
+        writing the continuous final_story.mp4.
 
-        This is the "frames as they generate" path. The streaming model produces
-        frames chunk-by-chunk from a single prompt per shot (see PLAN.md), so the
-        caller can push each frame to the browser the moment it exists instead of
-        waiting for the whole render + stitch.
+        This is the seamless, non-stitched path. Instead of a fresh rollout per
+        shot (which leaves a visible seam at every cut), we start a SINGLE
+        rollout sized for all shots and TRANSITION the prompt at each shot
+        boundary while the KV-cache carries the visual state forward -- the
+        engine's own hardcut/ramp_to pattern (cf_streaming.py __main__):
+          - continuity 'cut_new_scene' -> hardcut(prompt)  (swap conditioning)
+          - anything else              -> ramp_to(prompt)  (smooth SLERP morph)
+        so frames flow one into the next with no stitch.
         """
         if not shots:
             raise ValueError("stream_plan requires at least one shot")
         out = Path(out_dir).resolve()
         out.mkdir(parents=True, exist_ok=True)
 
+        gen = self._StreamingCF(self._pipe, seed=self.seed, window=self.window, sink=self.sink)
+        nfpb = gen.nfpb
+
+        # Per-shot latent-frame budgets (snapped to whole chunks), summed into one
+        # continuous rollout length.
+        budgets: list[int] = []
+        for shot in shots:
+            lf = max(nfpb, int(round(seconds_per_shot * LATENT_FPS)))
+            lf -= lf % nfpb
+            budgets.append(lf)
+        total = sum(budgets)
+
+        prompts = [s.get("prompt") for s in shots]
+        if not prompts[0]:
+            raise ValueError("shot 0 has no prompt")
+
+        # latent-frame index where each later shot begins -> (prompt, continuity)
+        boundaries: dict[int, tuple[str, str]] = {}
+        acc = 0
+        for i in range(1, len(shots)):
+            acc += budgets[i - 1]
+            if prompts[i]:
+                boundaries[acc] = (prompts[i], (shots[i].get("continuity") or "").lower())
+
+        gen.start(prompts[0], total_frames=total)
+        self._pipe.vae.model.clear_cache()
+
         all_frames: list[np.ndarray] = []
-        for i, shot in enumerate(shots):
-            prompt = shot.get("prompt")
-            if not prompt:
-                raise ValueError(f"shot {i} has no prompt")
-            gen = self._StreamingCF(self._pipe, seed=self.seed, window=self.window, sink=self.sink)
-            total = max(gen.nfpb, int(round(seconds_per_shot * LATENT_FPS)))
-            total -= total % gen.nfpb
-            gen.start(prompt, total_frames=total)
-            self._pipe.vae.model.clear_cache()
-            for _ in range(total // gen.nfpb):
-                den = gen.step()                 # DiT denoise -> clean latents
-                chunk = gen.decode_chunk(den)    # VAE decode -> uint8 [nf,H,W,3]
-                for frame in chunk:
-                    all_frames.append(frame)
-                    yield frame
-            logger.info("streamed shot %d/%d (%d frames so far)", i + 1, len(shots), len(all_frames))
+        produced = 0
+        for _ in range(total // nfpb):
+            if produced in boundaries:           # entering a new shot -> transition prompt
+                new_prompt, continuity = boundaries[produced]
+                # A single rollout is one continuously-morphing shot: the KV-cache
+                # keeps the picture flowing, so a hardcut to an UNRELATED prompt
+                # doesn't cut -- it hallucinates the new prompt into the old frame.
+                # For seamlessness we always SLERP-morph; a brisker ramp for a
+                # declared scene change, a gentler one to hold continuity.
+                k = 4 if continuity == "cut_new_scene" else 8
+                gen.ramp_to(new_prompt, k=k)
+            den = gen.step()                     # DiT denoise -> clean latents
+            chunk = gen.decode_chunk(den)        # VAE decode -> uint8 [nf,H,W,3]
+            produced += nfpb
+            for frame in chunk:
+                all_frames.append(frame)
+                yield frame
 
         if all_frames:
             final = out / "final_story.mp4"
             imageio.mimwrite(str(final), np.stack(all_frames), fps=FPS,
                              codec="libx264", macro_block_size=1)
-            logger.info("saved streamed render -> %s (%d frames)", final, len(all_frames))
+            logger.info("saved seamless render -> %s (%d frames, %d shots)",
+                        final, len(all_frames), len(shots))
 
 
 def _ffmpeg_concat(clips: list[Path], final: Path) -> None:
