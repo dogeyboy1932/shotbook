@@ -28,7 +28,9 @@ imageio-ffmpeg
 ninja
 huggingface_hub[cli]
 
-# --- service ---
+# --- service + planning (Claude shot breakdown moved onto the VM) ---
 fastapi>=0.111.0
 uvicorn[standard]>=0.29.0
 pydantic>=2.0.0
+pydantic-settings>=2.0.0
+anthropic>=0.40.0
