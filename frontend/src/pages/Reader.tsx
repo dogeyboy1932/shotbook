@@ -1,10 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { api, videoStreamUrl, type ComposedScene, type GenerationContext, type Paragraph } from '../api'
+import { api, previewSceneFromContexts, videoStreamUrl, type ComposedScene, type GenerationContext, type Paragraph, type SavedClip } from '../api'
 import ContextPanel from '../components/ContextPanel'
+import SavedClips from '../components/SavedClips'
 import { clearHighlights, highlightRangeAcrossParagraphs } from '../lib/highlight'
 
 const PARAGRAPHS_PER_PAGE = 4
+
+const clipsKey = (bookId: string) => `shotbook:clips:${bookId}`
+const MAX_CLIPS = 10
+
+/** A short, human label for a saved clip, from the scene's action/selection. */
+function clipLabel(scene: ComposedScene | null): string {
+  const src = (scene?.action_summary || scene?.selected_text || '').replace(/[“”"_*]/g, '')
+  const words = src.split(/\s+/).filter(Boolean).slice(0, 4).join(' ')
+  return words.length > 30 ? `${words.slice(0, 30).trimEnd()}…` : words
+}
 
 export default function Reader() {
   const { bookId } = useParams<{ bookId: string }>()
@@ -26,6 +37,8 @@ export default function Reader() {
   const [videoStatus, setVideoStatus] = useState<string | null>(null)
   const [renderError, setRenderError] = useState<string | null>(null)
 
+  const [savedClips, setSavedClips] = useState<SavedClip[]>([])
+
   const [pageIndex, setPageIndex] = useState(0)
 
   const containerRef = useRef<HTMLDivElement>(null)
@@ -41,6 +54,40 @@ export default function Reader() {
       .then(setParagraphs)
       .catch((err) => setLoadError(String(err)))
       .finally(() => setLoading(false))
+  }, [bookId])
+
+  // Saved clips persist in localStorage only for the duration of this visit:
+  // they survive an accidental refresh, but leaving the reader (unmount or
+  // switching books) wipes the store -- see the cleanup below.
+  useEffect(() => {
+    if (!bookId) {
+      setSavedClips([])
+      return
+    }
+    try {
+      const raw = localStorage.getItem(clipsKey(bookId))
+      setSavedClips(raw ? JSON.parse(raw) : [])
+    } catch {
+      setSavedClips([])
+    }
+    return () => {
+      // Leaving this book's reader: empty its saved-clip store.
+      try {
+        localStorage.removeItem(clipsKey(bookId))
+      } catch { /* ignore */ }
+    }
+  }, [bookId])
+
+  const removeClip = useCallback((id: string) => {
+    setSavedClips((prev) => {
+      const next = prev.filter((c) => c.id !== id)
+      if (bookId) {
+        try {
+          localStorage.setItem(clipsKey(bookId), JSON.stringify(next))
+        } catch { /* ignore quota */ }
+      }
+      return next
+    })
   }, [bookId])
 
   const pages = useMemo(() => {
@@ -130,14 +177,29 @@ export default function Reader() {
     }
   }, [selectedParagraphIds])
 
-  const startJobPoll = useCallback((jobId: string) => {
+  const startJobPoll = useCallback((jobId: string, label: string) => {
     const poll = async () => {
       try {
         const job = await api.getVideoJob(jobId)
         setVideoStatus(job.status)
         if (job.status === 'done' && job.video_url) {
-          setVideoUrl(job.video_url)
+          const url = job.video_url
+          setVideoUrl(url)
           setStreamUrl(null)
+          // Keep the finished clip in its own tab.
+          setSavedClips((prev) => {
+            if (prev.some((c) => c.id === jobId)) return prev
+            const next: SavedClip[] = [
+              { id: jobId, label: label || `Clip ${prev.length + 1}`, videoUrl: url, createdAt: Date.now() },
+              ...prev,
+            ]
+            if (bookId) {
+              try {
+                localStorage.setItem(clipsKey(bookId), JSON.stringify(next))
+              } catch { /* ignore quota */ }
+            }
+            return next
+          })
         } else if (job.status === 'failed') {
           setRenderError(job.error || 'Video render failed')
           setStreamUrl(null)
@@ -149,27 +211,40 @@ export default function Reader() {
       }
     }
     pollRef.current = setTimeout(poll, 1500)
-  }, [])
+  }, [bookId])
 
   const handleGenerate = useCallback(async () => {
     if (selectedParagraphIds.length === 0) return
+    if (savedClips.length >= MAX_CLIPS) {
+      setQueryError(`Clip limit reached (${MAX_CLIPS}). Remove a saved clip to generate another.`)
+      return
+    }
     setComposing(true)
     setStreamUrl(null)
     setVideoUrl(null)
     setVideoStatus(null)
     setRenderError(null)
     try {
-      const { scene, job_id } = await api.generateVideo(selectedParagraphIds)
+      // 1) Resolve world-state up front (fast Supabase RPC) and show the handoff
+      //    preview IMMEDIATELY so the user sees what's being generated. Reuse the
+      //    contexts already on screen if they queried first.
+      const ctx = contexts.length > 0 ? contexts : await api.queryContext(selectedParagraphIds)
+      if (contexts.length === 0) setContexts(ctx)
+      setComposedScene(previewSceneFromContexts(ctx))
+
+      // 2) Plan shots on the VM (Claude) + start the render; enrich the same
+      //    preview in place when the real shot plan lands.
+      const { scene, job_id } = await api.generateVideo(selectedParagraphIds, ctx)
       setComposedScene(scene)
       setStreamUrl(videoStreamUrl(job_id))
       setVideoStatus('planned')
-      startJobPoll(job_id)
+      startJobPoll(job_id, clipLabel(scene))
     } catch (err) {
       setQueryError(String(err))
     } finally {
       setComposing(false)
     }
-  }, [selectedParagraphIds, startJobPoll])
+  }, [selectedParagraphIds, contexts, savedClips.length, startJobPoll])
 
   useEffect(() => {
     return () => {
@@ -295,12 +370,15 @@ export default function Reader() {
             </button>
             <button
               onClick={handleGenerate}
-              disabled={selectedParagraphIds.length === 0 || composing || (!!streamUrl && !videoUrl)}
-              title="Plan shots and stream a ~10s seamless clip in real time"
+              disabled={selectedParagraphIds.length === 0 || composing || (!!streamUrl && !videoUrl) || savedClips.length >= MAX_CLIPS}
+              title={savedClips.length >= MAX_CLIPS ? `Clip limit reached (${MAX_CLIPS}) — remove a saved clip first` : 'Plan shots and stream a ~10s seamless clip in real time'}
               className="rounded-xl bg-amber-400 px-3 py-2 text-sm font-medium text-slate-900 transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {composing ? 'Planning…' : streamUrl && !videoUrl ? 'Rendering…' : 'Generate'}
             </button>
+            <span className={`self-center text-xs ${savedClips.length >= MAX_CLIPS ? 'font-medium text-red-400' : 'text-slate-500'}`}>
+              {savedClips.length}/{MAX_CLIPS} clips
+            </span>
           </div>
 
           {selectedParagraphIds.length > 0 && (
@@ -321,6 +399,8 @@ export default function Reader() {
             renderError={renderError}
             hasSelection={selectedParagraphIds.length > 0}
           />
+
+          <SavedClips clips={savedClips} onRemove={removeClip} />
         </div>
       </div>
     </div>

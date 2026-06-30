@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { type MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, type BookSummary, type IngestJob } from '../api'
 
@@ -24,6 +24,7 @@ export default function Library() {
   const [author, setAuthor] = useState('')
   const [job, setJob] = useState<IngestJob | null>(null)
   const [addError, setAddError] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<number | null>(null)
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const refreshBooks = useCallback(() => {
@@ -99,6 +100,20 @@ export default function Library() {
     }
   }, [file, title, author, pollJob])
 
+  const deleteBook = useCallback(async (book: BookSummary, e: MouseEvent) => {
+    e.stopPropagation()
+    if (!window.confirm(`Delete "${book.title}" and all its generated state? This cannot be undone.`)) return
+    setDeletingId(book.book_id)
+    try {
+      await api.deleteBook(book.book_id)
+      setBooks((prev) => prev.filter((b) => b.book_id !== book.book_id))
+    } catch (err) {
+      setError(String(err))
+    } finally {
+      setDeletingId(null)
+    }
+  }, [])
+
   const ingesting = job != null && job.status !== 'failed'
   const pct = job ? Math.round(job.progress * 100) : 0
 
@@ -151,27 +166,41 @@ export default function Library() {
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
             {books.map((book) => {
               const ready = book.ingestion_status === 'beats_pass_complete'
+              const deleting = deletingId === book.book_id
               return (
-                <button
+                <div
                   key={book.book_id}
-                  onClick={() => ready && navigate(`/books/${book.book_id}`)}
-                  disabled={!ready}
-                  className="group flex flex-col items-start gap-3 rounded-2xl border border-white/10 bg-slate-900/70 p-5 text-left transition duration-200 enabled:hover:-translate-y-1 enabled:hover:border-amber-400/50 enabled:hover:bg-slate-800/90 disabled:cursor-not-allowed disabled:opacity-60"
+                  onClick={() => ready && !deleting && navigate(`/books/${book.book_id}`)}
+                  className={`group relative flex flex-col items-start gap-3 rounded-2xl border border-white/10 bg-slate-900/70 p-5 text-left transition duration-200 ${
+                    ready && !deleting
+                      ? 'cursor-pointer hover:-translate-y-1 hover:border-amber-400/50 hover:bg-slate-800/90'
+                      : 'cursor-not-allowed opacity-60'
+                  }`}
                 >
                   <div className="flex w-full items-start justify-between gap-3">
                     <div>
                       <p className="text-sm font-medium text-amber-300">{book.title}</p>
                       <p className="mt-1 text-sm text-slate-400">{book.author ?? 'Unknown author'}</p>
                     </div>
-                    <span className="rounded-full border border-amber-400/30 bg-amber-400/10 px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.2em] text-amber-300">
-                      {ready ? 'Open' : 'Ingesting'}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="rounded-full border border-amber-400/30 bg-amber-400/10 px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.2em] text-amber-300">
+                        {ready ? 'Open' : 'Ingesting'}
+                      </span>
+                      <button
+                        onClick={(e) => deleteBook(book, e)}
+                        disabled={deleting}
+                        title="Delete story"
+                        className="rounded-full border border-red-500/30 bg-red-500/10 px-2 py-1 text-[11px] font-medium text-red-300 transition hover:bg-red-500/20 disabled:opacity-50"
+                      >
+                        {deleting ? '…' : '🗑'}
+                      </button>
+                    </div>
                   </div>
                   <div className="flex flex-wrap gap-2 text-xs text-slate-500">
                     <span className="rounded-full bg-slate-800 px-2.5 py-1">{book.paragraph_count} paragraphs</span>
                     <span className="rounded-full bg-slate-800 px-2.5 py-1">{book.ingestion_status}</span>
                   </div>
-                </button>
+                </div>
               )
             })}
           </div>

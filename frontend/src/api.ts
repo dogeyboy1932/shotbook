@@ -138,6 +138,14 @@ export interface GenerateVideoResponse {
   scene: ComposedScene
 }
 
+/** A finished render the user keeps in the Reader's "Saved clips" tabs. */
+export interface SavedClip {
+  id: string // render job_id
+  label: string
+  videoUrl: string
+  createdAt: number
+}
+
 export interface VideoJob {
   job_id: string
   status: 'planned' | 'running' | 'done' | 'failed'
@@ -201,6 +209,14 @@ export const api = {
 
   getIngestJob: (id: string) => request<IngestJob>(`/ingest/${id}`),
 
+  // Delete a story and all its data (Supabase RPC; ON DELETE CASCADE handles
+  // characters/locations/paragraphs/states). Returns rows deleted (0 or 1).
+  deleteBook: (bookId: number) =>
+    request<number>('/rest/v1/rpc/delete_book', {
+      method: 'POST',
+      body: JSON.stringify({ p_book_id: bookId }),
+    }),
+
   listParagraphs: (bookId: number) =>
     request<Paragraph[]>(
       `/rest/v1/paragraphs?select=paragraph_id,sequence_index,chapter_number,raw_text&book_id=eq.${bookId}&order=sequence_index.asc`,
@@ -210,12 +226,13 @@ export const api = {
   queryContext: resolveContexts,
 
   // "Generate" — resolve contexts (Supabase) then hand them to the VM to plan
-  // shots + render. The VM owns planning now (no FastAPI middle tier).
-  generateVideo: async (paragraphIds: number[]) => {
-    const contexts = await resolveContexts(paragraphIds)
+  // shots + render. The VM owns planning now (no FastAPI middle tier). Pass
+  // pre-resolved contexts (from the instant preview step) to avoid a 2nd RPC.
+  generateVideo: async (paragraphIds: number[], contexts?: GenerationContext[]) => {
+    const ctx = contexts ?? (await resolveContexts(paragraphIds))
     return request<GenerateVideoResponse>('/generate', {
       method: 'POST',
-      body: JSON.stringify({ contexts }),
+      body: JSON.stringify({ contexts: ctx }),
     })
   },
 
@@ -230,4 +247,34 @@ export const api = {
 /** Build the live MJPEG stream URL (VM) for a render job. */
 export function videoStreamUrl(jobId: string): string {
   return `${VM_BASE_URL || API_BASE_URL}/jobs/${jobId}/stream`
+}
+
+/**
+ * Compose an INSTANT handoff preview from resolved contexts — client-side, no
+ * GPU/Claude round-trip — so the user sees what's being generated the moment
+ * they hit Generate. `video` is null until the VM returns the real shot plan,
+ * which then replaces this. Mirrors the server's compose_scene merge.
+ */
+export function previewSceneFromContexts(contexts: GenerationContext[]): ComposedScene {
+  const seqs = contexts.map((c) => c.sequence_index)
+  const charByName = new Map<string, CharacterContext>()
+  let location: LocationContext | null = null
+  for (const c of contexts) {
+    for (const ch of c.characters) if (!charByName.has(ch.name)) charByName.set(ch.name, ch)
+    if (c.location) location = c.location
+  }
+  return {
+    book_id: contexts[0]?.book_id ?? 0,
+    paragraph_ids: contexts.map((c) => c.paragraph_id),
+    sequence_index_range: [Math.min(...seqs), Math.max(...seqs)],
+    selected_text: contexts.map((c) => c.raw_text).join(' '),
+    characters: [...charByName.values()],
+    location,
+    dialogue_script: contexts.flatMap((c) => c.dialogue_script ?? []),
+    sfx_prompts: [...new Set(contexts.flatMap((c) => c.sfx_prompts ?? []))],
+    camera_framing: contexts[0]?.camera_framing ?? '',
+    action_summary: contexts.map((c) => c.action_summary).filter(Boolean).join(' '),
+    video: null,
+    audio_prompt: '',
+  }
 }

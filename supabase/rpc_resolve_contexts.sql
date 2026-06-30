@@ -142,3 +142,24 @@ CREATE POLICY paragraphs_anon_read ON public.paragraphs FOR SELECT TO anon, auth
 
 GRANT USAGE ON SCHEMA public TO anon, authenticated;
 GRANT SELECT ON public.books, public.paragraphs TO anon, authenticated;
+
+-- -----------------------------------------------------------------------------
+-- delete_book(book_id) -- remove a story and ALL its data. SECURITY DEFINER so
+-- the anon role can delete without a broad DELETE grant on the table; the
+-- schema's ON DELETE CASCADE (books -> characters/locations/paragraphs ->
+-- states/paragraph_characters) tears down every child row. Returns the number
+-- of book rows deleted (0 if the id didn't exist).
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.delete_book(p_book_id bigint)
+RETURNS integer
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+    WITH deleted AS (
+        DELETE FROM public.books WHERE book_id = p_book_id RETURNING 1
+    )
+    SELECT count(*)::int FROM deleted;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.delete_book(bigint) TO anon, authenticated;

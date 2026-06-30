@@ -124,21 +124,42 @@ export default function ContextPanel({
               Handoff preview
             </p>
             <span className="rounded-full bg-slate-900/60 px-2.5 py-1 text-[11px] uppercase tracking-[0.2em] text-amber-300">
-              ready for GPU
+              {composedScene.video ? 'ready for GPU' : generating ? 'planning shots…' : 'state resolved'}
             </span>
           </div>
 
           <div className="rounded-xl border border-amber-400/20 bg-slate-900/50 p-2 text-slate-300">
-            <p className="text-xs uppercase tracking-[0.25em] text-amber-400/80">Preview</p>
+            <p className="text-xs uppercase tracking-[0.25em] text-amber-400/80">Generating this scene</p>
             <p className="mt-2 text-sm leading-6 text-slate-300">
               {composedScene.video?.shots?.[0]
                 ? `${composedScene.video.shots[0].camera} • ${composedScene.video.shots[0].action}`
                 : composedScene.action_summary}
             </p>
-            {composedScene.video && composedScene.video.shots.length > 1 && (
-              <p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-500">
-                {composedScene.video.shots.length} planned shots with continuity cues
-              </p>
+            {composedScene.video ? (
+              composedScene.video.shots.length > 1 && (
+                <p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-500">
+                  {composedScene.video.shots.length} planned shots with continuity cues
+                </p>
+              )
+            ) : (
+              // No shot plan yet — surface who/where from the resolved state so the
+              // user instantly knows what's being generated while Claude plans.
+              <div className="mt-3 space-y-1 border-t border-amber-400/15 pt-2 text-[13px]">
+                {composedScene.characters.map((c) => (
+                  <p key={c.character_id}>
+                    <span className="font-medium text-slate-200">{c.name}</span>
+                    {c.emotional_state && <span className="text-amber-300/90"> — {c.emotional_state}</span>}
+                  </p>
+                ))}
+                {composedScene.location && (
+                  <p>
+                    <span className="font-medium text-slate-200">{composedScene.location.name}</span>
+                    {composedScene.location.lighting_state && (
+                      <span className="text-amber-300/90"> — {composedScene.location.lighting_state}</span>
+                    )}
+                  </p>
+                )}
+              </div>
             )}
           </div>
 
