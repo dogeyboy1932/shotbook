@@ -1,10 +1,11 @@
-// Thin fetch wrapper around the book_video_gen FastAPI backend (app/main.py).
-// Defaults to relative paths, which Vite's dev server proxies to the
-// backend (see vite.config.ts) -- this is what makes "frontend + backend
-// both running on a remote box, only this dev server's port tunneled
-// back" work with zero config. Set VITE_API_BASE_URL only if the backend
-// is reachable on a different origin than this dev server.
+// Thin fetch wrapper for a UI-first architecture:
+// - book/paragraph data comes directly from Supabase REST when configured
+// - planning/render work is sent directly to the VM endpoint when configured
+// - the legacy relative /api path remains as a fallback for local development
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL ?? ''
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY ?? ''
+const VM_BASE_URL = import.meta.env.VITE_VM_BASE_URL ?? ''
 
 export interface BookSummary {
   book_id: number
@@ -100,9 +101,26 @@ export interface ComposedScene {
   audio_prompt: string
 }
 
+function buildUrl(path: string): string {
+  if (path.startsWith('/rest/v1/')) {
+    return `${SUPABASE_URL}${path}`
+  }
+  if (VM_BASE_URL) {
+    return `${VM_BASE_URL}${path}`
+  }
+  return `${API_BASE_URL}${path}`
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
+  const isSupabaseRest = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY && path.startsWith('/rest/v1/'))
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (isSupabaseRest) {
+    headers.apikey = SUPABASE_ANON_KEY
+    headers.Authorization = `Bearer ${SUPABASE_ANON_KEY}`
+  }
+
+  const response = await fetch(buildUrl(path), {
+    headers,
     ...init,
   })
   if (!response.ok) {
@@ -119,16 +137,28 @@ export interface GenerateVideoResponse {
 
 export interface VideoJob {
   job_id: string
-  status: 'pending' | 'running' | 'done' | 'failed'
+  status: 'planned' | 'running' | 'done' | 'failed'
   video_url: string | null
+  stream_url: string | null
   error: string | null
 }
 
 export const api = {
-  listBooks: () => request<BookSummary[]>('/api/books'),
+  listBooks: () => {
+    if (SUPABASE_URL && SUPABASE_ANON_KEY) {
+      return request<BookSummary[]>('/rest/v1/books?select=book_id,title,author,ingestion_status&order=book_id.asc')
+    }
+    return request<BookSummary[]>('/api/books')
+  },
 
-  listParagraphs: (bookId: number) =>
-    request<Paragraph[]>(`/api/books/${bookId}/paragraphs`),
+  listParagraphs: (bookId: number) => {
+    if (SUPABASE_URL && SUPABASE_ANON_KEY) {
+      return request<Paragraph[]>(
+        `/rest/v1/paragraphs?select=paragraph_id,sequence_index,chapter_number,raw_text&book_id=eq.${bookId}&order=sequence_index.asc`,
+      )
+    }
+    return request<Paragraph[]>(`/api/books/${bookId}/paragraphs`)
+  },
 
   queryContext: (paragraphIds: number[]) =>
     request<GenerationContext[]>('/api/generate-context/batch', {
@@ -142,11 +172,16 @@ export const api = {
       body: JSON.stringify({ paragraph_ids: paragraphIds }),
     }),
 
-  generateVideo: (paragraphIds: number[], quality = false) =>
+  generateVideo: (paragraphIds: number[]) =>
     request<GenerateVideoResponse>('/api/generate-video', {
       method: 'POST',
-      body: JSON.stringify({ paragraph_ids: paragraphIds, quality }),
+      body: JSON.stringify({ paragraph_ids: paragraphIds }),
     }),
 
   getVideoJob: (jobId: string) => request<VideoJob>(`/api/video-jobs/${jobId}`),
+}
+
+/** Build the live MJPEG stream URL for a render job. */
+export function videoStreamUrl(jobId: string): string {
+  return `${VM_BASE_URL || API_BASE_URL}/api/video-jobs/${jobId}/stream`
 }

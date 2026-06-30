@@ -1,12 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { api, type ComposedScene, type GenerationContext, type Paragraph } from '../api'
+import { api, videoStreamUrl, type ComposedScene, type GenerationContext, type Paragraph } from '../api'
 import ContextPanel from '../components/ContextPanel'
 import { clearHighlights, highlightRangeAcrossParagraphs } from '../lib/highlight'
 
-// Paragraphs per page -- a stand-in for real pagination (which would be
-// driven by rendered line height / viewport size). Fixed here purely to
-// simulate page turns over a multi-page book.
 const PARAGRAPHS_PER_PAGE = 4
 
 export default function Reader() {
@@ -24,15 +21,16 @@ export default function Reader() {
 
   const [composedScene, setComposedScene] = useState<ComposedScene | null>(null)
   const [composing, setComposing] = useState(false)
-  // The backend renders server-side; we poll the job and play the stitched mp4
-  // (streamed from /api/video-jobs/{id}/video) once it's ready.
+  const [streamUrl, setStreamUrl] = useState<string | null>(null)
   const [videoUrl, setVideoUrl] = useState<string | null>(null)
   const [videoStatus, setVideoStatus] = useState<string | null>(null)
+  const [renderError, setRenderError] = useState<string | null>(null)
 
   const [pageIndex, setPageIndex] = useState(0)
 
   const containerRef = useRef<HTMLDivElement>(null)
   const paragraphElsRef = useRef<Map<number, HTMLParagraphElement>>(new Map())
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     if (!bookId) return
@@ -57,13 +55,16 @@ export default function Reader() {
   const currentPageParagraphs = pages[pageIndex] ?? []
 
   const resetSelection = useCallback(() => {
+    if (pollRef.current) clearTimeout(pollRef.current)
     if (containerRef.current) clearHighlights(containerRef.current)
     setSelectedParagraphIds([])
     setContexts([])
     setQueryError(null)
     setComposedScene(null)
+    setStreamUrl(null)
     setVideoUrl(null)
     setVideoStatus(null)
+    setRenderError(null)
   }, [])
 
   const goToPage = useCallback(
@@ -117,6 +118,8 @@ export default function Reader() {
     setQueryLoading(true)
     setQueryError(null)
     setComposedScene(null)
+    setStreamUrl(null)
+    setVideoUrl(null)
     try {
       const result = await api.queryContext(selectedParagraphIds)
       setContexts(result)
@@ -127,118 +130,182 @@ export default function Reader() {
     }
   }, [selectedParagraphIds])
 
-  const handleCompose = useCallback(async (quality: boolean) => {
+  const startJobPoll = useCallback((jobId: string) => {
+    const poll = async () => {
+      try {
+        const job = await api.getVideoJob(jobId)
+        setVideoStatus(job.status)
+        if (job.status === 'done' && job.video_url) {
+          setVideoUrl(job.video_url)
+          setStreamUrl(null)
+        } else if (job.status === 'failed') {
+          setRenderError(job.error || 'Video render failed')
+          setStreamUrl(null)
+        } else {
+          pollRef.current = setTimeout(poll, 1500)
+        }
+      } catch (err) {
+        setRenderError(String(err))
+      }
+    }
+    pollRef.current = setTimeout(poll, 1500)
+  }, [])
+
+  const handleGenerate = useCallback(async () => {
     if (selectedParagraphIds.length === 0) return
     setComposing(true)
+    setStreamUrl(null)
     setVideoUrl(null)
     setVideoStatus(null)
+    setRenderError(null)
     try {
-      const { scene, job_id } = await api.generateVideo(selectedParagraphIds, quality)
+      const { scene, job_id } = await api.generateVideo(selectedParagraphIds)
       setComposedScene(scene)
-      setVideoStatus('rendering')
-      // Poll the render job until the stitched mp4 is ready, then play it.
-      const poll = async () => {
-        try {
-          const job = await api.getVideoJob(job_id)
-          setVideoStatus(job.status)
-          if (job.status === 'done' && job.video_url) {
-            setVideoUrl(job.video_url)
-          } else if (job.status === 'failed') {
-            setQueryError(job.error || 'Video render failed')
-          } else {
-            setTimeout(poll, 3000)
-          }
-        } catch (err) {
-          setQueryError(String(err))
-        }
-      }
-      setTimeout(poll, 2000)
+      setStreamUrl(videoStreamUrl(job_id))
+      setVideoStatus('planned')
+      startJobPoll(job_id)
     } catch (err) {
       setQueryError(String(err))
     } finally {
       setComposing(false)
     }
-  }, [selectedParagraphIds])
+  }, [selectedParagraphIds, startJobPoll])
+
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearTimeout(pollRef.current)
+    }
+  }, [])
 
   return (
-    <div className="mx-auto flex max-w-6xl gap-8 px-6 py-8">
-      <div className="flex-1">
+    <div className="mx-auto flex min-h-screen max-w-7xl flex-col gap-6 px-4 py-6 lg:grid lg:grid-cols-[1.15fr_0.85fr] lg:px-6 lg:py-8">
+      <div className="min-w-0">
         <button
           onClick={() => navigate('/')}
-          className="mb-4 text-sm text-slate-400 hover:text-slate-200"
+          className="mb-4 text-sm font-medium text-slate-400 transition hover:text-amber-300"
         >
-          &larr; Back to library
+          ← Back to library
         </button>
 
-        {loading && <p className="text-slate-400">Loading text...</p>}
-        {loadError && (
-          <p className="rounded-lg bg-red-950 px-4 py-3 text-red-300">
-            Failed to load paragraphs: {loadError}
-          </p>
-        )}
+        <div className="rounded-3xl border border-white/10 bg-slate-900/80 p-4 shadow-2xl shadow-black/20 backdrop-blur sm:p-6">
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold uppercase tracking-[0.3em] text-amber-300/85">
+                Reader workspace
+              </p>
+              <h2 className="mt-1 text-2xl font-semibold text-white">Highlight a passage</h2>
+            </div>
+            <div className="rounded-full border border-white/10 bg-slate-800/80 px-3 py-1.5 text-sm text-slate-400">
+              Page {pageIndex + 1} of {totalPages}
+            </div>
+          </div>
 
-        {!loading && !loadError && (
-          <>
-            <div
-              ref={containerRef}
-              onMouseDown={handleMouseDown}
-              onMouseUp={handleMouseUp}
-              className="h-[70vh] overflow-y-auto rounded-xl border border-slate-700 bg-slate-900 p-8 leading-relaxed text-slate-200 select-text"
-            >
-              {currentPageParagraphs.map((paragraph) => (
-                <p
-                  key={paragraph.paragraph_id}
-                  ref={(el) => {
-                    if (el) paragraphElsRef.current.set(paragraph.paragraph_id, el)
-                    else paragraphElsRef.current.delete(paragraph.paragraph_id)
-                  }}
-                  data-paragraph-id={paragraph.paragraph_id}
-                  className="mb-4"
+          {loading && <p className="rounded-2xl border border-white/10 bg-slate-800/60 px-4 py-5 text-slate-400">Loading text…</p>}
+          {loadError && (
+            <p className="rounded-2xl border border-red-500/40 bg-red-950/40 px-4 py-5 text-red-300">
+              Failed to load paragraphs: {loadError}
+            </p>
+          )}
+
+          {!loading && !loadError && (
+            <>
+              <div
+                ref={containerRef}
+                onMouseDown={handleMouseDown}
+                onMouseUp={handleMouseUp}
+                className="h-[68vh] overflow-y-auto rounded-2xl border border-white/10 bg-slate-950/70 p-6 leading-8 text-slate-200 shadow-inner shadow-black/30 select-text"
+              >
+                {currentPageParagraphs.map((paragraph) => {
+                  const isSelected = selectedParagraphIds.includes(paragraph.paragraph_id)
+                  return (
+                    <p
+                      key={paragraph.paragraph_id}
+                      ref={(el) => {
+                        if (el) paragraphElsRef.current.set(paragraph.paragraph_id, el)
+                        else paragraphElsRef.current.delete(paragraph.paragraph_id)
+                      }}
+                      data-paragraph-id={paragraph.paragraph_id}
+                      className={`mb-4 rounded-xl px-3 py-2 transition ${
+                        isSelected
+                          ? 'bg-amber-400/15 text-white ring-1 ring-amber-400/30'
+                          : 'bg-transparent text-slate-200'
+                      }`}
+                    >
+                      {paragraph.raw_text}
+                    </p>
+                  )
+                })}
+              </div>
+
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                <button
+                  onClick={() => goToPage(pageIndex - 1)}
+                  disabled={pageIndex === 0}
+                  className="rounded-xl border border-white/10 bg-slate-800/70 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  {paragraph.raw_text}
-                </p>
-              ))}
-            </div>
-
-            <div className="mt-4 flex items-center justify-between">
-              <button
-                onClick={() => goToPage(pageIndex - 1)}
-                disabled={pageIndex === 0}
-                className="rounded-lg border border-slate-700 px-4 py-1.5 text-sm font-medium text-slate-200 transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                &larr; Previous page
-              </button>
-              <span className="text-sm text-slate-500">
-                Page {pageIndex + 1} of {totalPages}
-              </span>
-              <button
-                onClick={() => goToPage(pageIndex + 1)}
-                disabled={pageIndex === totalPages - 1}
-                className="rounded-lg border border-slate-700 px-4 py-1.5 text-sm font-medium text-slate-200 transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Next page &rarr;
-              </button>
-            </div>
-          </>
-        )}
+                  ← Previous page
+                </button>
+                <div className="text-sm text-slate-500">
+                  {selectedParagraphIds.length > 0
+                    ? `${selectedParagraphIds.length} paragraph${selectedParagraphIds.length > 1 ? 's' : ''} selected`
+                    : 'Select a passage to begin'}
+                </div>
+                <button
+                  onClick={() => goToPage(pageIndex + 1)}
+                  disabled={pageIndex === totalPages - 1}
+                  className="rounded-xl border border-white/10 bg-slate-800/70 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Next page →
+                </button>
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
-      <div className="w-96 shrink-0">
-        <div className="sticky top-8 rounded-xl border border-slate-700 bg-slate-900 p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-slate-100">Selection</h2>
+      <div className="min-w-0 lg:sticky lg:top-4 lg:self-start">
+        <div className="rounded-3xl border border-white/10 bg-slate-900/80 p-5 shadow-2xl shadow-black/20 backdrop-blur">
+          <div className="mb-4 flex items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold uppercase tracking-[0.3em] text-slate-400">Studio panel</p>
+              <h3 className="mt-1 text-xl font-semibold text-white">Compose the scene</h3>
+            </div>
+            <button
+              onClick={resetSelection}
+              className="rounded-full border border-white/10 bg-slate-800/80 px-3 py-1.5 text-sm text-slate-300 transition hover:bg-slate-700"
+            >
+              Clear
+            </button>
+          </div>
+
+          <div className="mb-5 rounded-2xl border border-amber-400/20 bg-amber-400/10 p-4 text-sm text-amber-100">
+            <p className="font-medium">Guide</p>
+            <p className="mt-1 text-amber-100/80">
+              Select a passage in the reader, then inspect the resolved story state or generate an instant cinematic preview.
+            </p>
+          </div>
+
+          <div className="mb-4 flex flex-wrap gap-2">
             <button
               onClick={handleQuery}
               disabled={selectedParagraphIds.length === 0 || queryLoading}
-              className="rounded-lg bg-slate-700 px-4 py-1.5 text-sm font-medium text-slate-100 transition hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-40"
+              className="rounded-xl bg-slate-700 px-3 py-2 text-sm font-medium text-slate-100 transition hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              Query
+              {queryLoading ? 'Querying…' : 'Get query'}
+            </button>
+            <button
+              onClick={handleGenerate}
+              disabled={selectedParagraphIds.length === 0 || composing || (!!streamUrl && !videoUrl)}
+              title="Plan shots and stream a ~10s seamless clip in real time"
+              className="rounded-xl bg-amber-400 px-3 py-2 text-sm font-medium text-slate-900 transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {composing ? 'Planning…' : streamUrl && !videoUrl ? 'Rendering…' : 'Generate'}
             </button>
           </div>
 
           {selectedParagraphIds.length > 0 && (
-            <p className="mb-4 text-xs text-slate-500">
-              Spans paragraph_id(s): {selectedParagraphIds.join(', ')}
+            <p className="mb-4 text-xs uppercase tracking-[0.25em] text-slate-500">
+              Paragraph IDs: {selectedParagraphIds.join(', ')}
             </p>
           )}
 
@@ -247,10 +314,12 @@ export default function Reader() {
             composedScene={composedScene}
             loading={queryLoading}
             error={queryError}
-            onCompose={handleCompose}
-            composing={composing}
+            generating={composing}
+            streamUrl={streamUrl}
             videoUrl={videoUrl}
             videoStatus={videoStatus}
+            renderError={renderError}
+            hasSelection={selectedParagraphIds.length > 0}
           />
         </div>
       </div>

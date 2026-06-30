@@ -23,7 +23,12 @@ export default defineConfig({
     // (5173) tunneled back to a local machine -- no separate API tunnel,
     // and no cross-origin requests for the browser to worry about.
     proxy: {
-      '/api': 'http://localhost:8080',
+      '/api': {
+        target: 'http://localhost:8080',
+        // Long-running MJPEG streams must not time out or buffer.
+        timeout: 0,
+        proxyTimeout: 0,
+      },
       '/healthz': 'http://localhost:8080',
     },
   },

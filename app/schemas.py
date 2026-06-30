@@ -84,9 +84,6 @@ class BatchContextRequest(BaseModel):
 
 class ComposeSceneRequest(BaseModel):
     paragraph_ids: list[int]
-    # When true, route the render to the cinematic 5B "HD" renderer instead of
-    # the fast 1.3B streaming preview (slower, much higher quality).
-    quality: bool = False
 
 
 class VideoWorldPayload(BaseModel):

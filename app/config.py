@@ -59,6 +59,8 @@ class Settings(BaseSettings):
         "overexposed, static frame, text, subtitles, watermark, worst quality, low quality, "
         "cartoon, 3d render, cgi, anime"
     )
+    # Allow up to 4 shots for longer beats while preserving one continuous,
+    # seamlessly transitioning scene plan rather than forcing hard cuts.
     max_video_shots_per_scene: int = 4
 
     # --- Claude API (compose-scene's video shot planning only --

@@ -1,14 +1,17 @@
 import type { ComposedScene, GenerationContext } from '../api'
+import LiveVideoPlayer from './LiveVideoPlayer'
 
 interface ContextPanelProps {
   contexts: GenerationContext[]
   composedScene: ComposedScene | null
   loading: boolean
   error: string | null
-  onCompose: (quality: boolean) => void
-  composing: boolean
+  generating: boolean
+  streamUrl: string | null
   videoUrl: string | null
   videoStatus: string | null
+  renderError: string | null
+  hasSelection: boolean
 }
 
 export default function ContextPanel({
@@ -16,190 +19,223 @@ export default function ContextPanel({
   composedScene,
   loading,
   error,
-  onCompose,
-  composing,
+  generating,
+  streamUrl,
   videoUrl,
   videoStatus,
+  renderError,
+  hasSelection,
 }: ContextPanelProps) {
+  const showVideo = generating || streamUrl || videoUrl || renderError
+  const hasContextData = contexts.length > 0 || Boolean(composedScene) || showVideo
+
   if (loading) {
-    return <p className="text-sm text-slate-400">Querying state for the selected text...</p>
+    return <p className="rounded-2xl border border-white/10 bg-slate-800/60 px-4 py-3 text-sm text-slate-400">Querying state for the selected text…</p>
   }
 
-  if (error) {
+  if (error && contexts.length === 0 && !composedScene) {
     return (
-      <p className="rounded-lg bg-red-950 px-4 py-3 text-sm text-red-300">
+      <p className="rounded-2xl border border-red-500/40 bg-red-950/40 px-4 py-3 text-sm text-red-300">
         Query failed: {error}
       </p>
     )
   }
 
-  if (contexts.length === 0) {
+  if (!hasSelection) {
     return (
-      <p className="text-sm text-slate-500">
-        Highlight a passage in the reader, then press Query to resolve its story state here.
+      <p className="rounded-2xl border border-white/10 bg-slate-800/60 px-4 py-3 text-sm text-slate-400">
+        Select a passage in the reader to inspect the resolved story state or generate a visual preview.
       </p>
+    )
+  }
+
+  if (!hasContextData) {
+    return (
+      <div className="space-y-4">
+        <div className="rounded-2xl border border-white/10 bg-slate-800/60 p-3 text-sm text-slate-400">
+          Your selection is ready. Generate to plan shots and stream a preview, or query first to inspect the story state.
+        </div>
+      </div>
     )
   }
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-400">
-          Resolved state ({contexts.length} paragraph{contexts.length > 1 ? 's' : ''})
-        </h3>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => onCompose(false)}
-            disabled={composing}
-            title="Fast 1.3B streaming preview (~seconds)"
-            className="rounded-lg bg-amber-400 px-4 py-1.5 text-sm font-medium text-slate-900 transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {composing ? 'Planning shots...' : 'Generate (Fast)'}
-          </button>
-          <button
-            onClick={() => onCompose(true)}
-            disabled={composing}
-            title="Cinematic 5B render at 720p (~2 min/shot)"
-            className="rounded-lg bg-violet-500 px-4 py-1.5 text-sm font-medium text-white transition hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Render in HD
-          </button>
+      <div className="rounded-2xl border border-white/10 bg-slate-800/60 p-3">
+        <div className="mb-3 flex items-center justify-between">
+          <p className="text-sm font-semibold text-slate-100">
+            Query output ({contexts.length} paragraph{contexts.length > 1 ? 's' : ''})
+          </p>
+          <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2.5 py-1 text-[11px] uppercase tracking-[0.2em] text-emerald-300">
+            grounded
+          </span>
+        </div>
+
+        <div className="space-y-2 rounded-xl border border-white/10 bg-slate-950/70 p-2">
+          {contexts.length > 0 ? (
+            contexts.map((ctx) => (
+              <details open key={ctx.paragraph_id} className="group rounded-xl border border-white/10 bg-slate-900/70 p-3">
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-medium text-slate-200">
+                  <span>Paragraph {ctx.paragraph_id}</span>
+                  <span className="text-xs uppercase tracking-[0.2em] text-slate-500">Open</span>
+                </summary>
+                <div className="mt-3 space-y-2 border-t border-white/10 pt-3 text-sm text-slate-300">
+                  <p>
+                    <span className="font-medium text-slate-200">Sequence:</span> {ctx.sequence_index}
+                  </p>
+                  <p>
+                    <span className="font-medium text-slate-200">Location:</span>{' '}
+                    {ctx.location ? ctx.location.name : 'none'}
+                  </p>
+                  <p>
+                    <span className="font-medium text-slate-200">Characters:</span>{' '}
+                    {ctx.characters.length > 0 ? ctx.characters.map((c) => c.name).join(', ') : 'none'}
+                  </p>
+                  <p>
+                    <span className="font-medium text-slate-200">Action:</span> {ctx.action_summary}
+                  </p>
+                  {ctx.narrative_context && (
+                    <p>
+                      <span className="font-medium text-slate-200">Narrative:</span> {ctx.narrative_context}
+                    </p>
+                  )}
+                </div>
+              </details>
+            ))
+          ) : (
+            <div className="rounded-xl border border-dashed border-white/10 bg-slate-900/50 p-4 text-sm text-slate-400">
+              The selection is ready for handoff. Once you generate, the passage excerpt, shot plan, and audio prompt will appear here.
+            </div>
+          )}
         </div>
       </div>
 
-      <div className="max-h-[28rem] space-y-3 overflow-y-auto pr-1">
-        {contexts.map((ctx) => (
-          <div
-            key={ctx.paragraph_id}
-            className="rounded-lg border border-slate-700 bg-slate-800/60 p-3 text-sm"
-          >
-            <div className="mb-1 flex items-center justify-between text-xs text-slate-500">
-              <span>paragraph_id={ctx.paragraph_id}</span>
-              <span>seq={ctx.sequence_index}</span>
-            </div>
-            <p className="text-slate-300">
-              <span className="font-medium text-slate-200">Location: </span>
-              {ctx.location ? ctx.location.name : 'none'}
+      {showVideo && (
+        <div className="rounded-2xl border border-white/10 bg-slate-800/60 p-3">
+          <LiveVideoPlayer
+            streamUrl={streamUrl}
+            videoUrl={videoUrl}
+            planning={generating}
+            status={videoStatus}
+            error={renderError}
+          />
+        </div>
+      )}
+
+      {composedScene && (
+        <div className="space-y-3 rounded-2xl border border-amber-400/20 bg-amber-400/10 p-3 text-sm">
+          <div className="flex items-center justify-between gap-3">
+            <p className="font-semibold text-amber-200">
+              Handoff preview
             </p>
-            <p className="text-slate-300">
-              <span className="font-medium text-slate-200">Characters: </span>
-              {ctx.characters.length > 0
-                ? ctx.characters.map((c) => c.name).join(', ')
-                : 'none'}
-            </p>
-            <p className="mt-1 text-slate-400">{ctx.action_summary}</p>
+            <span className="rounded-full bg-slate-900/60 px-2.5 py-1 text-[11px] uppercase tracking-[0.2em] text-amber-300">
+              ready for GPU
+            </span>
           </div>
-        ))}
-      </div>
 
-      {composedScene?.video && (
-        <div className="space-y-2 rounded-lg border border-amber-400/40 bg-amber-400/10 p-3 text-sm">
-          <p className="font-medium text-amber-300">
-            {composedScene.video.shots.length} video shot
-            {composedScene.video.shots.length > 1 ? 's' : ''} planned (full payload logged to
-            the browser console).
-          </p>
+          <div className="rounded-xl border border-amber-400/20 bg-slate-900/50 p-2 text-slate-300">
+            <p className="text-xs uppercase tracking-[0.25em] text-amber-400/80">Preview</p>
+            <p className="mt-2 text-sm leading-6 text-slate-300">
+              {composedScene.video?.shots?.[0]
+                ? `${composedScene.video.shots[0].camera} • ${composedScene.video.shots[0].action}`
+                : composedScene.action_summary}
+            </p>
+            {composedScene.video && composedScene.video.shots.length > 1 && (
+              <p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-500">
+                {composedScene.video.shots.length} planned shots with continuity cues
+              </p>
+            )}
+          </div>
 
-          <details className="rounded border border-amber-400/20 bg-slate-900/40 p-2">
-            <summary className="cursor-pointer text-xs font-mono uppercase tracking-wide text-amber-400/80">
-              world
+          <details className="rounded-xl border border-amber-400/20 bg-slate-900/50 p-2 text-slate-300">
+            <summary className="cursor-pointer text-xs font-semibold uppercase tracking-[0.25em] text-amber-400/80">
+              Scene summary
             </summary>
-            <div className="mt-1 space-y-1 text-slate-300">
-              {Object.entries(composedScene.video.world.characters).map(([name, desc]) => (
-                <p key={name}>
-                  <span className="font-medium text-slate-200">{name}: </span>
-                  {desc}
-                </p>
-              ))}
-              {composedScene.video.world.location && (
-                <p>
-                  <span className="font-medium text-slate-200">location: </span>
-                  {composedScene.video.world.location}
-                </p>
-              )}
+            <div className="mt-2 space-y-2 text-sm leading-6">
               <p>
-                <span className="font-medium text-slate-200">look: </span>
-                {composedScene.video.world.look}
+                <span className="font-medium text-slate-200">Selection:</span> {composedScene.selected_text}
+              </p>
+              <p>
+                <span className="font-medium text-slate-200">Camera framing:</span> {composedScene.camera_framing}
+              </p>
+              <p>
+                <span className="font-medium text-slate-200">Action:</span> {composedScene.action_summary}
+              </p>
+              <p>
+                <span className="font-medium text-slate-200">Audio prompt:</span> {composedScene.audio_prompt}
               </p>
             </div>
           </details>
 
-          {composedScene.video.shots.map((shot) => (
-            <div
-              key={shot.shot_id}
-              className="rounded border border-amber-400/20 bg-slate-900/40 p-2"
-            >
-              <div className="flex items-center justify-between">
-                <p className="text-xs font-mono uppercase tracking-wide text-amber-400/80">
-                  {shot.shot_id}
-                </p>
-                <span
-                  className={`rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${
-                    shot.continuity === 'continuous_frame'
-                      ? 'bg-emerald-400/20 text-emerald-300'
-                      : shot.continuity === 'cut_same_scene'
-                        ? 'bg-sky-400/20 text-sky-300'
-                        : 'bg-slate-700 text-slate-300'
-                  }`}
-                >
-                  {shot.continuity === 'continuous_frame'
-                    ? 'continues from prev'
-                    : shot.continuity === 'cut_same_scene'
-                      ? 'cut, same scene'
-                      : 'new scene'}
-                </span>
-              </div>
-              <p className="mt-1 text-slate-400">
-                <span className="font-medium text-slate-300">camera: </span>
-                {shot.camera}
-              </p>
-              <p className="text-slate-400">
-                <span className="font-medium text-slate-300">action: </span>
-                {shot.action}
-              </p>
-              <p className="text-slate-400">
-                <span className="font-medium text-slate-300">light: </span>
-                {shot.light}
-              </p>
-              <p className="mt-1 text-slate-300">{shot.prompt}</p>
-              <p className="mt-1 text-sky-300">
-                <span className="font-medium text-sky-200">audio: </span>
-                {shot.audio_prompt}
-              </p>
-            </div>
-          ))}
+          {composedScene.video && (
+            <>
+              <details className="rounded-xl border border-amber-400/20 bg-slate-900/50 p-2">
+                <summary className="cursor-pointer text-xs font-semibold uppercase tracking-[0.25em] text-amber-400/80">
+                  World anchors
+                </summary>
+                <div className="mt-2 space-y-1 text-slate-300">
+                  {Object.entries(composedScene.video.world.characters).map(([name, desc]) => (
+                    <p key={name}>
+                      <span className="font-medium text-slate-200">{name}:</span> {desc}
+                    </p>
+                  ))}
+                  {composedScene.video.world.location && (
+                    <p>
+                      <span className="font-medium text-slate-200">location:</span>{' '}
+                      {composedScene.video.world.location}
+                    </p>
+                  )}
+                  <p>
+                    <span className="font-medium text-slate-200">look:</span> {composedScene.video.world.look}
+                  </p>
+                </div>
+              </details>
 
-          <p className="pt-1 text-slate-400">
-            <span className="font-medium text-slate-300">negative_prompt: </span>
-            {composedScene.video.negative_prompt}
-          </p>
-          <p className="text-slate-400">
-            <span className="font-medium text-slate-300">audio_prompt: </span>
-            {composedScene.audio_prompt}
-          </p>
+              <details className="rounded-xl border border-amber-400/20 bg-slate-900/50 p-2">
+                <summary className="cursor-pointer text-xs font-semibold uppercase tracking-[0.25em] text-amber-400/80">
+                  Shot plan
+                </summary>
+                <div className="mt-2 space-y-2">
+                  {composedScene.video.shots.map((shot) => (
+                    <div key={shot.shot_id} className="rounded-xl border border-amber-400/20 bg-slate-900/50 p-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-xs font-semibold uppercase tracking-[0.25em] text-amber-400/80">
+                          {shot.shot_id}
+                        </p>
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.2em] ${
+                            shot.continuity === 'continuous_frame'
+                              ? 'bg-emerald-400/20 text-emerald-300'
+                              : shot.continuity === 'cut_same_scene'
+                                ? 'bg-sky-400/20 text-sky-300'
+                                : 'bg-slate-700 text-slate-300'
+                          }`}
+                        >
+                          {shot.continuity === 'continuous_frame'
+                            ? 'continues from prev'
+                            : shot.continuity === 'cut_same_scene'
+                              ? 'cut, same scene'
+                              : 'new scene'}
+                        </span>
+                      </div>
+                      <p className="mt-2 text-slate-400">
+                        <span className="font-medium text-slate-300">camera:</span> {shot.camera}
+                      </p>
+                      <p className="text-slate-400">
+                        <span className="font-medium text-slate-300">action:</span> {shot.action}
+                      </p>
+                      <p className="text-slate-400">
+                        <span className="font-medium text-slate-300">light:</span> {shot.light}
+                      </p>
+                      <p className="mt-2 text-slate-300">{shot.prompt}</p>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            </>
+          )}
         </div>
       )}
-
-      {videoUrl ? (
-        <div className="space-y-2 rounded-lg border border-emerald-400/40 bg-emerald-400/10 p-3 text-sm">
-          <p className="font-medium text-emerald-300">Generated video</p>
-          <video
-            src={videoUrl}
-            controls
-            autoPlay
-            loop
-            className="w-full rounded-lg border border-slate-700 bg-black"
-          />
-        </div>
-      ) : videoStatus && videoStatus !== 'done' ? (
-        <div className="rounded-lg border border-amber-400/40 bg-amber-400/10 p-3 text-sm">
-          <p className="font-medium text-amber-300">Rendering on the GPU…</p>
-          <p className="mt-1 text-slate-400">
-            Generating the shots and stitching them — usually well under a minute. Status:{' '}
-            <span className="font-mono text-slate-300">{videoStatus}</span>
-          </p>
-        </div>
-      ) : null}
     </div>
   )
 }
