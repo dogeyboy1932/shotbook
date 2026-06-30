@@ -151,10 +151,53 @@ const resolveContexts = (paragraphIds: number[]) =>
     body: JSON.stringify({ p_paragraph_ids: paragraphIds }),
   })
 
+export interface IngestJob {
+  ingest_job_id: string
+  status: 'queued' | 'running' | 'done' | 'failed'
+  stage: string
+  completed: number
+  total: number
+  progress: number
+  eta_seconds: number | null
+  book_id: number | null
+  error: string | null
+}
+
+interface BookRow {
+  book_id: number
+  title: string
+  author: string | null
+  ingestion_status: string
+  paragraphs: { count: number }[]
+}
+
 export const api = {
-  // Book + page data straight from Supabase REST.
-  listBooks: () =>
-    request<BookSummary[]>('/rest/v1/books?select=book_id,title,author,ingestion_status&order=book_id.asc'),
+  // Book + page data straight from Supabase REST (paragraph count via embedded count).
+  listBooks: async (): Promise<BookSummary[]> => {
+    const rows = await request<BookRow[]>(
+      '/rest/v1/books?select=book_id,title,author,ingestion_status,paragraphs(count)&order=book_id.asc',
+    )
+    return rows.map((r) => ({
+      book_id: r.book_id,
+      title: r.title,
+      author: r.author,
+      ingestion_status: r.ingestion_status,
+      paragraph_count: r.paragraphs?.[0]?.count ?? 0,
+    }))
+  },
+
+  // Upload a .txt/.pdf to the VM and kick off Claude ingestion -> Supabase.
+  ingestBook: async (file: File, title: string, author: string) => {
+    const form = new FormData()
+    form.append('file', file)
+    form.append('title', title)
+    form.append('author', author)
+    const res = await fetch(`${VM_BASE_URL || API_BASE_URL}/ingest`, { method: 'POST', body: form })
+    if (!res.ok) throw new Error(`Ingest failed (${res.status}): ${await res.text()}`)
+    return res.json() as Promise<{ ingest_job_id: string }>
+  },
+
+  getIngestJob: (id: string) => request<IngestJob>(`/ingest/${id}`),
 
   listParagraphs: (bookId: number) =>
     request<Paragraph[]>(

@@ -33,6 +33,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 
+from services.renderer.ingest import router as ingest_router
 from services.renderer.planning import VideoPlanningError, compose_scene, generate_video_plan
 from services.renderer.renderer import RenderEngine
 from services.renderer.schema import RenderRequest, RenderResponse
@@ -77,6 +78,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Library "Add story" -> upload .txt/.pdf -> Claude ingestion -> Supabase.
+app.include_router(ingest_router)
 
 
 @app.get("/health")
