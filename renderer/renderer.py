@@ -14,7 +14,7 @@ Rendering model (single GPU, see stream_plan):
     VAE caches) = a genuine hard cut, not a morph;
   - all decoded frames are written straight to final_story.mp4 (no ffmpeg stitch).
 
-Real-time engine + attribution: see vendor/cf_streaming.py and NOVELTY.md.
+Real-time engine + attribution: see vendor/cf_streaming.py and _docs/NOVELTY.md.
 Deferred (see PLAN.md): the 2-GPU DiT/VAE pipeline split.
 """
 from __future__ import annotations

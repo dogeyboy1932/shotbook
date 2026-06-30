@@ -1,6 +1,6 @@
 # Where the novelty lives
 
-**Short answer: [`renderer/vendor/cf_streaming.py`](vendor/cf_streaming.py).**
+**Short answer: [`renderer/vendor/cf_streaming.py`](../renderer/vendor/cf_streaming.py).**
 
 ShotBook's defensible, real-time idea is *perceived-immediate, steerable* video
 generation: frames appear as the model is prompted, the picture morphs smoothly

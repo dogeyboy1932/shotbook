@@ -40,13 +40,20 @@ appearance, **lighting/atmosphere**, dialogue, SFX, and profiles.
   (appearance, current status, setting + atmosphere, style) into every shot's prompt
   so identity/look never drift and the full state is grounded in each clip.
 
-## Rendering (renderer/renderer.py)
+## Rendering (renderer/renderer.py + vendor/cf_streaming.py)
 
-The vendored Causal-Forcing **Wan2.1-T2V-1.3B** streaming model generates the whole
-passage as a **single autoregressive rollout**: the KV-cache carries pixels forward
-across shot boundaries while `ramp_to` morphs the prompt — so transitions are
-seamless, no per-shot clips, no ffmpeg stitch. Frames are streamed as decoded
-(`multipart/x-mixed-replace`).
+The vendored Causal-Forcing **Wan2.1-T2V-1.3B** streaming model renders the passage
+in continuous **segments**, split at every `cut_new_scene`:
+- within a segment, one autoregressive rollout carries the KV-cache forward and
+  `ramp_to` SLERP-morphs the prompt across same-scene shot changes — seamless, no
+  stitch;
+- at a genuine scene break, a **fresh rollout** (new noise + cleared KV/cross-attn/
+  VAE caches) gives a real hard cut instead of one face morphing into another.
+
+Frames stream as decoded (`multipart/x-mixed-replace`). A per-job `PromptBus`
+(`POST /jobs/{id}/steer`) lets the viewer steer a running render: the loop appends
+the typed text to the active shot prompt and morphs toward it, holding steady when
+idle. The engine and its attribution are detailed in `_docs/NOVELTY.md`.
 
 ## Notable engineering
 - Supabase reached via the **pooler** (VM is IPv4-only) with verified TLS against the
