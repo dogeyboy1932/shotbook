@@ -22,7 +22,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 # Ensure the repo root is importable so `ingestion` + `app` resolve when the
 # service is launched via the uvicorn console script (which, unlike `python -m`,
 # doesn't put the working dir on sys.path).
-_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
@@ -46,8 +46,6 @@ def _parse_upload(filename: str, data: bytes) -> str:
 
 
 async def _run_ingest(job_id: str, title: str, author: str | None, source_uri: str, text: str) -> None:
-    from ingestion.orchestrator import ingest_book
-
     job = _ingest_jobs[job_id]
 
     def cb(stage: str, completed: int, total: int) -> None:
@@ -59,6 +57,11 @@ async def _run_ingest(job_id: str, title: str, author: str | None, source_uri: s
         )
 
     try:
+        # Deferred import kept inside the try so an import failure surfaces as a
+        # failed job (with error) instead of an unretrieved task exception that
+        # leaves the job silently stuck at "queued".
+        from ingestion.orchestrator import ingest_book
+
         job["status"] = "running"
         book_id = await ingest_book(
             title=title, author=author, source_uri=source_uri, raw_book_text=text, progress_cb=cb
