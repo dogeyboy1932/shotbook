@@ -440,6 +440,33 @@ async def _request_shot_breakdown(user_prompt: str) -> ShotBreakdown:
     raise VideoPlanningError(f"Exhausted {_MAX_RETRIES} attempts against the Claude API") from last_error
 
 
+def bootstrap_plan(scene: ComposedScenePayload) -> VideoPlanPayload:
+    """A deterministic ONE-shot plan with NO Claude call, so the render can start
+    the INSTANT /generate is hit (Phase 7 / M2). Built from the same anchors the
+    real planner uses -- `_build_world` + `_build_prompt` over the scene's own
+    camera framing, action summary, and full cast -- so the first frame is already
+    grounded in character/setting/style. The refined Claude plan is morphed in
+    later, on the same running rollout."""
+    world = _build_world(scene)
+    prompt = _build_prompt(
+        camera=scene.camera_framing.replace("_", " "),
+        action=scene.action_summary,
+        light="",
+        subjects=[c.name for c in scene.characters],
+        world=world,
+    )
+    shot = VideoShotPayload(
+        shot_id="00_bootstrap",
+        camera=scene.camera_framing.replace("_", " "),
+        action=scene.action_summary,
+        light="",
+        continuity="cut_new_scene",
+        prompt=prompt,
+        audio_prompt="",
+    )
+    return VideoPlanPayload(world=world, shots=[shot], negative_prompt=settings.video_negative_prompt)
+
+
 async def generate_video_plan(scene: ComposedScenePayload) -> VideoPlanPayload:
     """Plan camera/action/light per shot via Claude, then deterministically
     splice in the fixed world anchors + style + continuity so appearance/look

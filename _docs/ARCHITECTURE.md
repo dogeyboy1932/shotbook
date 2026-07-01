@@ -68,9 +68,19 @@ queued scenes have headroom. The engine and its attribution are in `_docs/NOVELT
 - Ingestion uses **prompt-based JSON** (not grammar-constrained structured output),
   which the deeply-nested beat schema requires.
 
+## Perceived-immediate first frame (Phase 7 / M2)
+`/generate` no longer waits on Claude. It builds a deterministic **bootstrap** shot
+(`planning.bootstrap_plan`, no LLM — same `_build_world`/`_build_prompt` anchors) and
+returns a job instantly; the render (opened via `/stream`) starts on the bootstrap so
+the **first frame lands in ~1–2s**. Claude's refined breakdown is composed concurrently
+(`_plan_in_background`) and pushed into the running rollout via the same thread-safe
+`RenderControl` queue that powers steering; `stream_plan` **morphs** the bootstrap frame
+into the cinematic plan (`ramp_to`), then plays the beats. On a planning failure the
+bootstrap take just plays on. `GET /jobs/{id}` exposes `plan_ready` + the refined scene
+so the UI swaps its "planning shots…" preview for the real breakdown.
+
 ## Paused / future
 - **Audio** (dialogue TTS + SFX) is paused; the data is still captured. Old services
   are in the gitignored `archive/`.
-- **M2 real-time injection**: start the rollout from a state-derived bootstrap prompt
-  and inject Claude's shots into the running stream, dropping first-frame latency from
-  ~11s to ~1–2s.
+- Higher-quality / larger diffusion checkpoint; per-resolution KV caches; distilling the
+  speedup into the AR model.

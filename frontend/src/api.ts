@@ -159,6 +159,10 @@ export interface VideoJob {
   phase: RenderPhase | null
   buffer_remaining: number | null
   steers_remaining: number | null
+  // Phase 7: the refined Claude plan is composed in the background after the
+  // bootstrap render starts. `scene` carries the real shot breakdown once ready.
+  plan_ready: boolean
+  scene: ComposedScene | null
 }
 
 // Resolve a highlighted span's full Tier-1/Tier-2 state via the Supabase RPC.

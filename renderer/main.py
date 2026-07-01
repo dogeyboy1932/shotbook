@@ -35,7 +35,13 @@ from pydantic import BaseModel
 
 from renderer.config import settings
 from renderer.ingest import router as ingest_router
-from renderer.planning import VideoPlanningError, compose_scene, compose_steer_prompt, generate_video_plan
+from renderer.planning import (
+    VideoPlanningError,
+    bootstrap_plan,
+    compose_scene,
+    compose_steer_prompt,
+    generate_video_plan,
+)
 from renderer.renderer import RenderControl, RenderEngine
 from renderer.schema import RenderRequest, RenderResponse
 from renderer.schemas import GenerateRequest
@@ -103,7 +109,8 @@ def _mjpeg(shots: list[dict], out_dir: str, seconds_per_shot: float, control=Non
                                          control=control, max_session_frames=max_session_frames,
                                          buffer_seconds=settings.realtime_buffer_seconds,
                                          steer_window=settings.realtime_steer_window,
-                                         steer_ramp=settings.realtime_steer_ramp_chunks):
+                                         steer_ramp=settings.realtime_steer_ramp_chunks,
+                                         await_plan=True):
             bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
             ok, jpg = cv2.imencode(".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
             if not ok:
@@ -116,39 +123,64 @@ def _mjpeg(shots: list[dict], out_dir: str, seconds_per_shot: float, control=Non
 # ===========================================================================
 # High-level frontend flow: /generate + /jobs/*
 # ===========================================================================
+async def _plan_in_background(job_id: str, scene) -> None:
+    """Phase 7: compose the refined Claude plan WHILE the bootstrap already
+    renders, then push the refined shots into the running rollout so it morphs
+    from the bootstrap into the cinematic plan. On any failure the bootstrap take
+    just plays on (graceful) -- we still mark plan_ready so the UI stops waiting."""
+    job = _jobs.get(job_id)
+    if job is None:
+        return
+    try:
+        plan = await generate_video_plan(scene)
+        job["plan"] = plan.model_dump()
+        job["refined_scene"] = scene.model_copy(update={"video": plan}).model_dump()
+        job["steer_context"] = plan.shots[-1].prompt if plan.shots else job.get("steer_context", "")
+        ctl = job.get("control")
+        if ctl is not None:
+            ctl.push_plan(job["plan"]["shots"])  # render thread morphs into these
+    except Exception as exc:  # noqa: BLE001 - never fail the render on a planning error
+        logger.warning("background planning failed for job %s: %s -- keeping bootstrap take", job_id, exc)
+    finally:
+        if job_id in _jobs:
+            _jobs[job_id]["plan_ready"] = True
+
+
 @app.post("/generate")
 async def generate(req: GenerateRequest) -> dict:
-    """Plan shots for the highlighted span's resolved contexts (from Supabase),
-    store the plan, and return a job_id. The render begins when the browser
-    opens /jobs/{id}/stream."""
+    """Start a render IMMEDIATELY from a deterministic bootstrap plan (no LLM) and
+    return a job_id right away; the refined Claude shot plan is composed in the
+    background and morphed into the already-running rollout (Phase 7). First frame
+    lands in ~1-2s instead of waiting on planning."""
     if not req.contexts:
         raise HTTPException(status_code=400, detail="contexts must not be empty")
     if not engine.is_loaded:
         raise HTTPException(status_code=503, detail="model not loaded yet")
 
     scene = compose_scene(req.contexts)
-    try:
-        plan = await generate_video_plan(scene)
-    except VideoPlanningError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    scene = scene.model_copy(update={"video": plan})
+    boot = bootstrap_plan(scene)
+    boot_scene = scene.model_copy(update={"video": boot})
 
     job_id = str(uuid.uuid4())
     (JOBS_DIR / job_id).mkdir(exist_ok=True)
     _jobs[job_id] = {
         "status": "planned",
-        "plan": plan.model_dump(),
+        "plan": boot.model_dump(),           # bootstrap now; replaced when Claude returns
+        "plan_ready": False,                 # flips true when the refined plan lands
+        "refined_scene": None,
         "seconds_per_shot": req.seconds_per_shot or None,
         "video_path": None,
         "error": None,
-        # Running description of what the current frame shows, seeded from the
-        # LAST planned shot (the frame takeover holds on). Each steer edits this.
-        "steer_context": plan.shots[-1].prompt if plan.shots else "",
-        "style": plan.world.look,
+        # Running description of the current frame, seeded from the bootstrap shot.
+        "steer_context": boot.shots[-1].prompt if boot.shots else "",
+        "style": boot.world.look,
         # live-control channel for /jobs/{id}/{steer,takeover,pause,resume,finish}
         "control": RenderControl(max_steers=settings.max_steers_per_session),
     }
-    return {"job_id": job_id, "scene": scene.model_dump()}
+    # Refine the plan concurrently; the render (opened via /stream) starts on the
+    # bootstrap and morphs into this when it's pushed.
+    asyncio.create_task(_plan_in_background(job_id, scene))
+    return {"job_id": job_id, "scene": boot_scene.model_dump()}
 
 
 @app.get("/jobs/{job_id}")
@@ -170,6 +202,10 @@ def get_job(job_id: str) -> dict:
         "phase": phase if running else None,
         "buffer_remaining": buffer_remaining if running else None,
         "steers_remaining": steers_remaining if running else None,
+        # Phase 7: the refined Claude plan is composed in the background; the UI
+        # swaps its "planning shots…" preview for the real breakdown when ready.
+        "plan_ready": job.get("plan_ready", True),
+        "scene": job.get("refined_scene"),
     }
 
 

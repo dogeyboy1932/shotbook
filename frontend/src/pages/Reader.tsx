@@ -213,6 +213,7 @@ export default function Reader() {
   }, [selectedParagraphIds])
 
   const startJobPoll = useCallback((jobId: string, label: string, scene: ComposedScene | null) => {
+    let enriched = false
     const poll = async () => {
       try {
         const job = await api.getVideoJob(jobId)
@@ -223,6 +224,12 @@ export default function Reader() {
         setBufferRemaining(job.buffer_remaining)
         // Seed steer budget from the poll, but let a just-sent steer's response win.
         setSteersRemaining((prev) => (prev == null ? job.steers_remaining : prev))
+        // Phase 7: the render starts on a bootstrap plan; swap in the refined
+        // Claude breakdown once it's composed in the background.
+        if (!enriched && job.plan_ready && job.scene) {
+          enriched = true
+          setComposedScene(job.scene)
+        }
         if (job.status === 'done' && job.video_url) {
           const url = job.video_url
           setVideoUrl(url)

@@ -62,6 +62,7 @@ class RenderControl:
     def __init__(self, max_steers: int = 10) -> None:
         self._lock = threading.Lock()
         self._queue: list[str] = []  # pending steer prompts (FIFO), drained by the loop
+        self._plan: list | None = None  # refined shots from the async planner (Phase 7)
         self._steers_used = 0        # how many steers have been accepted this session
         self._max_steers = max(0, int(max_steers))
         self._takeover = False       # user pressed Takeover
@@ -92,6 +93,20 @@ class RenderControl:
         """Engine-side: next queued steer prompt, or None if the queue is empty."""
         with self._lock:
             return self._queue.pop(0) if self._queue else None
+
+    # -- live PLANNED shots (Phase 7): async planner -> render thread ----------
+    def push_plan(self, shots: list) -> None:
+        """Producer (background Claude planner): hand the refined shot list to the
+        running render so it can morph off the bootstrap into the real plan."""
+        with self._lock:
+            self._plan = shots
+
+    def pop_plan(self):
+        """Consumer (render thread): the refined shots once, then None. Returns
+        the list exactly one time so the PLANNED phase picks it up at a boundary."""
+        with self._lock:
+            plan, self._plan = self._plan, None
+            return plan
 
     def finish(self) -> None:
         with self._lock:
@@ -218,7 +233,7 @@ class RenderEngine:
     def stream_plan(self, shots: list[dict], out_dir: str,
                     seconds_per_shot: float = DEFAULT_SECONDS_PER_SHOT, control=None,
                     max_session_frames: int | None = None, buffer_seconds: float = 0.0,
-                    steer_window: int = 6, steer_ramp: int = 4):
+                    steer_window: int = 6, steer_ramp: int = 4, await_plan: bool = False):
         """Generator: render a passage live as a SEQUENCE of beats, yielding each
         decoded pixel frame as it is produced, then writing final_story.mp4.
 
@@ -252,26 +267,9 @@ class RenderEngine:
         gen = self._StreamingCF(self._pipe, seed=self.seed, window=self.window, sink=self.sink)
         nfpb = gen.nfpb
 
-        # Per-shot latent-frame budgets (snapped to whole chunks).
-        budgets: list[int] = []
-        for _shot in shots:
-            lf = max(nfpb, int(round(seconds_per_shot * LATENT_FPS)))
-            lf -= lf % nfpb
-            budgets.append(lf)
-
         prompts = [s.get("prompt") for s in shots]
         if not prompts[0]:
             raise ValueError("shot 0 has no prompt")
-
-        # Partition shot indices into continuous segments. A 'cut_new_scene'
-        # (and always shot 0) opens a new segment -> a fresh rollout = hard cut.
-        segments: list[list[int]] = []
-        for i, shot in enumerate(shots):
-            is_cut = i == 0 or (shot.get("continuity") or "").lower() == "cut_new_scene"
-            if is_cut or not segments:
-                segments.append([i])
-            else:
-                segments[-1].append(i)
 
         all_frames: list[np.ndarray] = []
         last_frame: np.ndarray | None = None
@@ -299,39 +297,84 @@ class RenderEngine:
         finished = False
         took_over = False
 
-        # ---- PLANNED phase: the beats Claude planned, in order ----------------
-        for segment in segments:
-            if finished or took_over:
-                break
-            head = prompts[segment[0]]
-            if not head:                          # skip a malformed promptless segment head
-                continue
-            seg_total = sum(budgets[i] for i in segment)
+        def render_shot_list(shot_list, morph_first):
+            """Render a shots list segment-by-segment: same-scene beats ramp_to
+            (seamless), a 'cut_new_scene' beat starts a FRESH rollout (real hard
+            cut). If morph_first, the FIRST segment ramps from the CURRENT running
+            rollout instead of a fresh start -- the seamless bootstrap->plan morph
+            (Phase 7). Sets finished/took_over on early break; yields frames."""
+            nonlocal finished, took_over
+            b = []
+            for _ in shot_list:
+                lf = max(nfpb, int(round(seconds_per_shot * LATENT_FPS)))
+                lf -= lf % nfpb
+                b.append(lf)
+            p = [s.get("prompt") for s in shot_list]
+            segs: list[list[int]] = []
+            for idx, sh in enumerate(shot_list):
+                if idx == 0 or (sh.get("continuity") or "").lower() == "cut_new_scene":
+                    segs.append([idx])
+                else:
+                    segs[-1].append(idx)
+            for si, segment in enumerate(segs):
+                if finished or took_over:
+                    return
+                head = p[segment[0]]
+                if not head:
+                    continue
+                seg_total = sum(b[i] for i in segment)
+                seg_boundaries: dict[int, str] = {}
+                acc = 0
+                for j, i in enumerate(segment[1:], start=1):
+                    acc += b[segment[j - 1]]
+                    if p[i]:
+                        seg_boundaries[acc] = p[i]
+                if morph_first and si == 0:
+                    gen.ramp_to(head, k=8)         # seamless morph from the running rollout
+                else:
+                    gen.start(head, total_frames=ceiling)  # fresh rollout = hard cut
+                    self._pipe.vae.model.clear_cache()
+                produced = 0
+                while produced < seg_total:
+                    takeover_req, fin = flags()
+                    if fin:
+                        finished = True
+                        return
+                    if takeover_req:
+                        took_over = True
+                        return
+                    if produced in seg_boundaries:
+                        gen.ramp_to(seg_boundaries[produced], k=8)
+                    produced += nfpb
+                    yield from emit()
 
-            # latent-frame index WITHIN this segment -> planned beat prompt.
-            seg_boundaries: dict[int, str] = {}
-            acc = 0
-            for j, i in enumerate(segment[1:], start=1):
-                acc += budgets[segment[j - 1]]
-                if prompts[i]:
-                    seg_boundaries[acc] = prompts[i]
-
-            gen.start(head, total_frames=ceiling)  # fresh rollout (= hard cut at a segment)
+        # ---- PLANNED phase ----------------------------------------------------
+        if await_plan and control is not None:
+            # Phase 7: `shots` is the deterministic BOOTSTRAP (one shot). Start it
+            # instantly for a ~1-2s first frame, hold on it while the refined plan
+            # is composed in the background, then morph seamlessly into that plan.
+            gen.start(prompts[0], total_frames=ceiling)
             self._pipe.vae.model.clear_cache()
-
+            refined = None
             produced = 0
-            while produced < seg_total:
+            while produced < ceiling and not finished and not took_over:
                 takeover_req, fin = flags()
                 if fin:
                     finished = True
                     break
-                if takeover_req:                  # user pressed Takeover -> hand off
+                if takeover_req:
                     took_over = True
                     break
-                if produced in seg_boundaries:    # planned beat change -> smooth morph
-                    gen.ramp_to(seg_boundaries[produced], k=8)
+                refined = control.pop_plan()
+                if refined:
+                    break
                 produced += nfpb
                 yield from emit()
+            if refined and not finished and not took_over:
+                yield from render_shot_list(refined, morph_first=True)
+        else:
+            # Non-interactive / no live planner: render the given shots directly.
+            yield from render_shot_list(shots, morph_first=False)
 
         # ---- BUFFER phase: countdown before composing (planned beats finished) -
         if control is not None and not took_over and not finished and buffer_seconds > 0:
@@ -392,8 +435,8 @@ class RenderEngine:
             final = out / "final_story.mp4"
             imageio.mimwrite(str(final), np.stack(all_frames), fps=FPS,
                              codec="libx264", macro_block_size=1)
-            logger.info("saved render -> %s (%d frames, %d shots, %d segments, takeover=%s)",
-                        final, len(all_frames), len(shots), len(segments), took_over)
+            logger.info("saved render -> %s (%d frames, await_plan=%s, takeover=%s)",
+                        final, len(all_frames), await_plan, took_over)
 
 
 def _ffmpeg_concat(clips: list[Path], final: Path) -> None:
