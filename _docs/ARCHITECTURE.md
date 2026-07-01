@@ -42,18 +42,24 @@ appearance, **lighting/atmosphere**, dialogue, SFX, and profiles.
 
 ## Rendering (renderer/renderer.py + vendor/cf_streaming.py)
 
-The vendored Causal-Forcing **Wan2.1-T2V-1.3B** streaming model renders the passage
-in continuous **segments**, split at every `cut_new_scene`:
+The passage is planned as a **sequence of beats** (one shot per distinct action)
+and the vendored Causal-Forcing **Wan2.1-T2V-1.3B** model renders them in order, in
+continuous **segments** split at every `cut_new_scene`:
 - within a segment, one autoregressive rollout carries the KV-cache forward and
-  `ramp_to` SLERP-morphs the prompt across same-scene shot changes — seamless, no
-  stitch;
+  `ramp_to` SLERP-morphs the prompt across same-scene beats — seamless, no stitch;
 - at a genuine scene break, a **fresh rollout** (new noise + cleared KV/cross-attn/
-  VAE caches) gives a real hard cut instead of one face morphing into another.
+  VAE caches) gives a real hard cut, so multi-action passages read sequentially
+  instead of one face/scene morphing into another.
 
-Frames stream as decoded (`multipart/x-mixed-replace`). A per-job `PromptBus`
-(`POST /jobs/{id}/steer`) lets the viewer steer a running render: the loop appends
-the typed text to the active shot prompt and morphs toward it, holding steady when
-idle. The engine and its attribution are detailed in `_docs/NOVELTY.md`.
+Frames stream as decoded (`multipart/x-mixed-replace`). A per-job `RenderControl`
+(`POST /jobs/{id}/{takeover,steer,pause,resume,finish}`) gives the viewer live
+control in real-time mode, with a `phase` published on `GET /jobs/{id}`:
+**running** (planned beats), **buffering** (a countdown before composing —
+pause/resume the timer, skip to save now, or take over), and **takeover** (each
+**steer** is queued into the model and rendered one scene at a time; between them
+the rollout holds; **only finish** composes; steers capped at
+`max_steers_per_session`). Rollouts are allocated to `max_session_seconds` so the
+queued scenes have headroom. The engine and its attribution are in `_docs/NOVELTY.md`.
 
 ## Notable engineering
 - Supabase reached via the **pooler** (VM is IPv4-only) with verified TLS against the

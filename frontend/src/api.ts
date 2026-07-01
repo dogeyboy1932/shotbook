@@ -147,12 +147,18 @@ export interface SavedClip {
   createdAt: number
 }
 
+export type RenderPhase = 'running' | 'buffering' | 'takeover'
+
 export interface VideoJob {
   job_id: string
   status: 'planned' | 'running' | 'done' | 'failed'
   video_url: string | null
   stream_url: string | null
   error: string | null
+  // Real-time control phase + countdown + steer budget (only while running).
+  phase: RenderPhase | null
+  buffer_remaining: number | null
+  steers_remaining: number | null
 }
 
 // Resolve a highlighted span's full Tier-1/Tier-2 state via the Supabase RPC.
@@ -237,14 +243,28 @@ export const api = {
     })
   },
 
-  // Live-steer a running real-time render (#5): push a text modifier onto the
-  // job's prompt bus; the render loop morphs the frames toward it at the next
-  // chunk. An empty prompt clears the steer (frames drift back to the plan).
+  // Enter takeover mode: the render hands control to the user — generation holds
+  // until they steer, each steer renders one scene then holds again.
+  takeoverGeneration: (jobId: string) =>
+    request<{ ok: boolean }>(`/jobs/${jobId}/takeover`, { method: 'POST' }),
+
+  // In takeover mode, QUEUE a steer (renders one scene then holds). Capped per
+  // session; returns whether it was accepted and how many steers remain.
   steerGeneration: (jobId: string, prompt: string) =>
-    request<{ ok: boolean }>(`/jobs/${jobId}/steer`, {
+    request<{ ok: boolean; accepted: boolean; steers_remaining: number }>(`/jobs/${jobId}/steer`, {
       method: 'POST',
       body: JSON.stringify({ prompt }),
     }),
+
+  // Pause/resume the post-plan COUNTDOWN (buffering phase) so the user can decide.
+  pauseGeneration: (jobId: string) =>
+    request<{ ok: boolean }>(`/jobs/${jobId}/pause`, { method: 'POST' }),
+  resumeGeneration: (jobId: string) =>
+    request<{ ok: boolean }>(`/jobs/${jobId}/resume`, { method: 'POST' }),
+
+  // Compose & save now (Skip during the countdown, or Finish during takeover).
+  finishGeneration: (jobId: string) =>
+    request<{ ok: boolean }>(`/jobs/${jobId}/finish`, { method: 'POST' }),
 
   // Poll the VM render job; absolutize the VM-relative URLs it returns.
   getVideoJob: async (jobId: string): Promise<VideoJob> => {

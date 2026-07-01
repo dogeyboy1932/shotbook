@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import type { ComposedScene, GenerationContext } from '../api'
+import { useEffect, useState, type FormEvent } from 'react'
+import type { ComposedScene, GenerationContext, RenderPhase } from '../api'
 import type { RenderMode } from '../hooks/useUserPreferences'
 import LiveVideoPlayer from './LiveVideoPlayer'
 
@@ -15,7 +15,14 @@ interface ContextPanelProps {
   renderError: string | null
   hasSelection: boolean
   renderMode: RenderMode
+  renderPhase: RenderPhase | null
+  bufferRemaining: number | null
+  steersRemaining: number | null
+  onTakeover: () => void
   onSteer: (prompt: string) => void
+  onPause: () => void
+  onResume: () => void
+  onFinish: () => void
 }
 
 export default function ContextPanel({
@@ -30,7 +37,14 @@ export default function ContextPanel({
   renderError,
   hasSelection,
   renderMode,
+  renderPhase,
+  bufferRemaining,
+  steersRemaining,
+  onTakeover,
   onSteer,
+  onPause,
+  onResume,
+  onFinish,
 }: ContextPanelProps) {
   const showVideo = generating || streamUrl || videoUrl || renderError
   const hasContextData = contexts.length > 0 || Boolean(composedScene) || showVideo
@@ -122,7 +136,16 @@ export default function ContextPanel({
             mode={renderMode}
           />
           {renderMode === 'realtime' && streamUrl && !videoUrl && !renderError && (
-            <SteerBox onSteer={onSteer} />
+            <LiveControls
+              phase={renderPhase}
+              bufferRemaining={bufferRemaining}
+              steersRemaining={steersRemaining}
+              onTakeover={onTakeover}
+              onSteer={onSteer}
+              onPause={onPause}
+              onResume={onResume}
+              onFinish={onFinish}
+            />
           )}
         </div>
       )}
@@ -270,47 +293,164 @@ export default function ContextPanel({
   )
 }
 
-/** Live steering (#5): type a change while a real-time render runs and the frames
- *  morph toward it; leave it alone and they hold steady. Submitting empty clears. */
-function SteerBox({ onSteer }: { onSteer: (prompt: string) => void }) {
-  const [text, setText] = useState('')
+/** Real-time controls, driven by the render phase:
+ *  - running/buffering (NOT takeover): a "Take over" button; during the post-plan
+ *    countdown also a live timer, Skip (compose now), and Pause/Resume (the countdown);
+ *  - takeover: a steer input + Steer (render one scene, then hold) and Finish (compose).
+ */
+function LiveControls({
+  phase,
+  bufferRemaining,
+  steersRemaining,
+  onTakeover,
+  onSteer,
+  onPause,
+  onResume,
+  onFinish,
+}: {
+  phase: RenderPhase | null
+  bufferRemaining: number | null
+  steersRemaining: number | null
+  onTakeover: () => void
+  onSteer: (prompt: string) => void
+  onPause: () => void
+  onResume: () => void
+  onFinish: () => void
+}) {
+  if (phase === 'takeover') {
+    return <TakeoverBox steersRemaining={steersRemaining} onSteer={onSteer} onFinish={onFinish} />
+  }
+  // running or buffering (pre-takeover)
   return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault()
-        onSteer(text.trim())
-      }}
-      className="rounded-2xl border border-emerald-400/30 bg-emerald-400/5 p-3"
-    >
-      <p className="text-xs font-semibold uppercase tracking-[0.25em] text-emerald-300/80">Steer the render</p>
+    <div className="space-y-2 rounded-2xl border border-emerald-400/30 bg-emerald-400/5 p-3">
+      {phase === 'buffering' ? (
+        <Countdown remaining={bufferRemaining} onSkip={onFinish} onPause={onPause} onResume={onResume} />
+      ) : (
+        <p className="text-[12px] leading-5 text-slate-400">
+          The planned beats are rendering. <span className="text-emerald-300/90">Take over</span> any time to steer the scene yourself.
+        </p>
+      )}
+      <button
+        type="button"
+        onClick={onTakeover}
+        className="w-full rounded-lg bg-emerald-400 px-3 py-1.5 text-sm font-medium text-slate-900 transition hover:bg-emerald-300"
+      >
+        Take over
+      </button>
+    </div>
+  )
+}
+
+/** The post-plan countdown: a live timer, Skip (compose now), Pause/Resume (the timer). */
+function Countdown({
+  remaining,
+  onSkip,
+  onPause,
+  onResume,
+}: {
+  remaining: number | null
+  onSkip: () => void
+  onPause: () => void
+  onResume: () => void
+}) {
+  // Tick a local display between server polls; reseed whenever the server reports.
+  const [secs, setSecs] = useState(remaining ?? 0)
+  const [paused, setPaused] = useState(false)
+  useEffect(() => {
+    if (remaining != null) setSecs(remaining)
+  }, [remaining])
+  useEffect(() => {
+    if (paused) return
+    const t = setInterval(() => setSecs((s) => Math.max(0, s - 1)), 1000)
+    return () => clearInterval(t)
+  }, [paused])
+
+  return (
+    <div>
+      <p className="text-xs font-semibold uppercase tracking-[0.25em] text-emerald-300/80">
+        Composing in {Math.ceil(secs)}s
+      </p>
       <p className="mt-1 text-[12px] leading-5 text-slate-400">
-        Type a change (&ldquo;make it snow&rdquo;, &ldquo;push in closer&rdquo;) and the live frames morph toward it. Leave it be and they hold steady.
+        Planned beats done. It saves when the countdown ends — <span className="text-emerald-300/90">Take over</span> to keep going, <span className="text-emerald-300/90">Skip</span> to save now, or pause the timer.
+      </p>
+      <div className="mt-2 flex gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            if (paused) { onResume(); setPaused(false) } else { onPause(); setPaused(true) }
+          }}
+          className="rounded-lg border border-emerald-400/30 px-3 py-1.5 text-xs font-medium text-emerald-200 transition hover:bg-emerald-400/10"
+        >
+          {paused ? 'Resume timer' : 'Pause timer'}
+        </button>
+        <button
+          type="button"
+          onClick={onSkip}
+          className="rounded-lg border border-amber-400/40 px-3 py-1.5 text-xs font-medium text-amber-200 transition hover:bg-amber-400/10"
+        >
+          Skip &amp; save
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/** Takeover steering: each Steer is queued (renders one scene, then holds); the
+ *  only thing that composes is Finish. Steers are capped per session. */
+function TakeoverBox({
+  steersRemaining,
+  onSteer,
+  onFinish,
+}: {
+  steersRemaining: number | null
+  onSteer: (prompt: string) => void
+  onFinish: () => void
+}) {
+  const [text, setText] = useState('')
+  const exhausted = steersRemaining != null && steersRemaining <= 0
+  const submit = (e: FormEvent) => {
+    e.preventDefault()
+    if (!text.trim() || exhausted) return
+    onSteer(text.trim())
+    setText('')
+  }
+  return (
+    <form onSubmit={submit} className="rounded-2xl border border-emerald-400/30 bg-emerald-400/5 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs font-semibold uppercase tracking-[0.25em] text-emerald-300/80">You're steering</p>
+        {steersRemaining != null && (
+          <span className={`text-[11px] font-medium ${exhausted ? 'text-red-400' : 'text-emerald-300/80'}`}>
+            {steersRemaining} steer{steersRemaining === 1 ? '' : 's'} left
+          </span>
+        )}
+      </div>
+      <p className="mt-1 text-[12px] leading-5 text-slate-400">
+        {exhausted
+          ? <>You've used all your steers. Hit <span className="text-amber-300/90">Finish</span> to compose &amp; save.</>
+          : <>Describe the next beat and hit <span className="text-emerald-300/90">Steer</span> — it's queued into the model and renders that scene, then holds until your next one. Only <span className="text-amber-300/90">Finish</span> composes &amp; saves.</>}
       </p>
       <div className="mt-2 flex gap-2">
         <input
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="add a detail…"
-          className="min-w-0 flex-1 rounded-lg border border-white/10 bg-slate-950/70 px-3 py-1.5 text-sm text-slate-200 outline-none transition focus:border-emerald-400/50"
+          placeholder={exhausted ? 'no steers left…' : 'describe the next beat…'}
+          disabled={exhausted}
+          className="min-w-0 flex-1 rounded-lg border border-white/10 bg-slate-950/70 px-3 py-1.5 text-sm text-slate-200 outline-none transition focus:border-emerald-400/50 disabled:opacity-40"
         />
         <button
           type="submit"
-          className="shrink-0 rounded-lg bg-emerald-400 px-3 py-1.5 text-sm font-medium text-slate-900 transition hover:bg-emerald-300"
+          disabled={exhausted}
+          className="shrink-0 rounded-lg bg-emerald-400 px-3 py-1.5 text-sm font-medium text-slate-900 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-40"
         >
           Steer
         </button>
-        {text && (
-          <button
-            type="button"
-            onClick={() => {
-              setText('')
-              onSteer('')
-            }}
-            className="shrink-0 rounded-lg border border-white/10 px-2 py-1.5 text-xs text-slate-300 transition hover:text-white"
-          >
-            clear
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={onFinish}
+          className="shrink-0 rounded-lg border border-amber-400/40 px-3 py-1.5 text-xs font-medium text-amber-200 transition hover:bg-amber-400/10"
+        >
+          Finish
+        </button>
       </div>
     </form>
   )

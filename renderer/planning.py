@@ -132,15 +132,19 @@ def compose_scene(payloads: list[GenerationContextPayload]) -> ComposedScenePayl
 # Shot planning (was app/video_prompting.py)
 # ===========================================================================
 
-SYSTEM_PROMPT = """You are a cinematographer breaking a book scene down into \
+SYSTEM_PROMPT = f"""You are a cinematographer breaking a book scene down into \
 shots for a text-to-video diffusion model.
 
-Given the resolved story state for a reader's highlighted passage, decide \
-whether it needs ONE shot or, at most, TWO. STRONGLY PREFER A SINGLE SHOT: a \
-highlighted passage is usually one continuous moment and renders best as one \
-sustained take. Add a second shot ONLY when the passage clearly contains a \
-distinct second beat -- a location change, a time jump, or a separate physical \
-action -- and never more than two.
+Given the resolved story state for a reader's highlighted passage, break it into \
+the natural SEQUENCE of beats it contains -- one shot per distinct action or \
+moment, in the order they happen. A passage where a character "leaves his house, \
+gets in his car, and drives away" is THREE shots in sequence, NOT one blended \
+shot -- the renderer plays them back to back so each action reads clearly \
+instead of melting together. Use as many shots as the passage has real beats, \
+up to {settings.max_video_shots_per_scene}. A passage that is a single vivid \
+image or one unbroken action is just one shot. Do NOT pad: only emit a shot for \
+something that actually happens in the highlighted lines, and keep the beats in \
+story order.
 
 CRITICAL, identity preservation: within a single continuous take the renderer \
 MORPHS smoothly from one shot's picture into the next, so within ONE scene you \
@@ -345,6 +349,66 @@ def _build_prompt(*, camera: str, action: str, light: str, subjects: list[str], 
     parts.append(light)
     parts.append(world.look)
     return " ".join(part.strip() for part in parts if part and part.strip())
+
+
+_STEER_SYSTEM = """You edit ONE continuous video shot, frame by frame, for a \
+text-to-video model.
+
+You are given the CURRENT on-screen description (what the frame shows right now) \
+and a requested CHANGE. Rewrite the description so that ONLY the requested change \
+is applied and EVERYTHING ELSE stays identical -- same character(s) and their \
+identity/build/wardrobe, same setting, same lighting and mood, same framing. The \
+result must read as a smooth edit of the SAME frame, not a new scene or a \
+different person.
+
+Output ONLY the new description: a single vivid present-tense paragraph of \
+exactly what is now on screen. It must be a DESCRIPTION, never an instruction -- \
+do NOT write "change", "now", "instead of", "transitions to", or name the old \
+state; just describe the final picture. Keep the cinematic style wording intact. \
+Be concise."""
+
+
+def _fallback_steer(current: str, change: str) -> str:
+    """No-LLM fallback: keep the current description and append the change as a
+    descriptive clause. Weaker than the LLM edit but still a full prompt."""
+    current, change = current.strip(), change.strip()
+    if not change:
+        return ""
+    return f"{current} {change}".strip() if current else change
+
+
+async def compose_steer_prompt(current_description: str, user_change: str, style: str = "") -> str:
+    """Build the NEXT frame's description from the CURRENT frame's description and
+    the user's requested change (this is the "each frame has a description; build
+    the change off it" model). Using Claude to merge them yields a target that
+    shares the subject/setting and differs only in the change -- so the engine's
+    ramp_to morph is focused (hood -> cap on the SAME man) instead of reinventing
+    the character. Falls back to appending the change if no API key / on error."""
+    change = (user_change or "").strip()
+    if not change:
+        return ""
+    if not settings.anthropic_api_key:
+        return _fallback_steer(current_description, change)
+    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    try:
+        # Fast/cheap model (Haiku): this merge is small, frequent, and latency-
+        # sensitive -- no need for the heavier planning model here.
+        resp = await client.messages.create(
+            model=settings.claude_fast_model,
+            max_tokens=500,
+            system=_STEER_SYSTEM,
+            messages=[{"role": "user",
+                       "content": f"CURRENT:\n{current_description}\n\nCHANGE:\n{change}"}],
+        )
+        text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
+        if not text:
+            return _fallback_steer(current_description, change)
+        if style and style.strip() and style.strip() not in text:
+            text = f"{text} {style.strip()}"
+        return text
+    except anthropic.APIError as exc:
+        logger.warning("steer composition failed (%s) -- falling back to append", exc)
+        return _fallback_steer(current_description, change)
 
 
 async def _request_shot_breakdown(user_prompt: str) -> ShotBreakdown:

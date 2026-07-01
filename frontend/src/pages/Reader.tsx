@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { api, previewSceneFromContexts, videoStreamUrl, type ComposedScene, type GenerationContext, type Paragraph, type SavedClip } from '../api'
 import ContextPanel from '../components/ContextPanel'
 import SavedClips from '../components/SavedClips'
+import type { RenderPhase } from '../api'
 import { useUserPreferences, type RenderMode } from '../hooks/useUserPreferences'
 import { clearHighlights, highlightRangeAcrossParagraphs } from '../lib/highlight'
 
@@ -38,6 +39,9 @@ export default function Reader() {
   const [videoStatus, setVideoStatus] = useState<string | null>(null)
   const [renderError, setRenderError] = useState<string | null>(null)
   const [jobId, setJobId] = useState<string | null>(null)
+  const [renderPhase, setRenderPhase] = useState<RenderPhase | null>(null)
+  const [bufferRemaining, setBufferRemaining] = useState<number | null>(null)
+  const [steersRemaining, setSteersRemaining] = useState<number | null>(null)
 
   const { prefs, setRenderMode } = useUserPreferences()
 
@@ -117,13 +121,32 @@ export default function Reader() {
     setVideoStatus(null)
     setRenderError(null)
     setJobId(null)
+    setRenderPhase(null)
+    setBufferRemaining(null)
+    setSteersRemaining(null)
   }, [])
 
-  // Live-steer the running render (#5). Fire-and-forget; a failed steer just
-  // means the frames keep following the planned shots.
+  // Live control of the running render. Fire-and-forget; a failure just means
+  // the render keeps following the planned beats.
+  const handleTakeover = useCallback(() => {
+    if (!jobId) return
+    setRenderPhase('takeover')  // optimistic: reveal the steer UI immediately
+    api.takeoverGeneration(jobId).catch(() => { /* non-fatal */ })
+  }, [jobId])
   const handleSteer = useCallback((prompt: string) => {
     if (!jobId) return
-    api.steerGeneration(jobId, prompt).catch(() => { /* non-fatal */ })
+    api.steerGeneration(jobId, prompt)
+      .then((r) => setSteersRemaining(r.steers_remaining))
+      .catch(() => { /* non-fatal */ })
+  }, [jobId])
+  const handlePause = useCallback(() => {
+    if (jobId) api.pauseGeneration(jobId).catch(() => { /* non-fatal */ })
+  }, [jobId])
+  const handleResume = useCallback(() => {
+    if (jobId) api.resumeGeneration(jobId).catch(() => { /* non-fatal */ })
+  }, [jobId])
+  const handleFinish = useCallback(() => {
+    if (jobId) api.finishGeneration(jobId).catch(() => { /* non-fatal */ })
   }, [jobId])
 
   const goToPage = useCallback(
@@ -194,6 +217,12 @@ export default function Reader() {
       try {
         const job = await api.getVideoJob(jobId)
         setVideoStatus(job.status)
+        // Phase drives the real-time controls (running / buffering / takeover).
+        // Don't clobber an optimistic 'takeover' the user just triggered.
+        setRenderPhase((prev) => (prev === 'takeover' && !job.phase ? prev : job.phase))
+        setBufferRemaining(job.buffer_remaining)
+        // Seed steer budget from the poll, but let a just-sent steer's response win.
+        setSteersRemaining((prev) => (prev == null ? job.steers_remaining : prev))
         if (job.status === 'done' && job.video_url) {
           const url = job.video_url
           setVideoUrl(url)
@@ -442,7 +471,14 @@ export default function Reader() {
             renderError={renderError}
             hasSelection={selectedParagraphIds.length > 0}
             renderMode={prefs.renderMode}
+            renderPhase={renderPhase}
+            bufferRemaining={bufferRemaining}
+            steersRemaining={steersRemaining}
+            onTakeover={handleTakeover}
             onSteer={handleSteer}
+            onPause={handlePause}
+            onResume={handleResume}
+            onFinish={handleFinish}
           />
 
           <SavedClips clips={savedClips} onRemove={removeClip} />

@@ -217,6 +217,34 @@ class StreamingCF:
         self.cur_prompt = new_prompt
 
     @torch.no_grad()
+    def steer(self, new_prompt, shrink_window=6, k=4):
+        """CONTINUOUS, strong edit of the CURRENT frame -- the _SPED "post-swap
+        KV-window shrink" strength lever, but as a MORPH (not a hard cut) so the
+        subject is preserved (see _docs/NOVELTY.md + findings). Two moves:
+          1. ramp_to (SLERP the prompt embedding old->new over k chunks): the frame
+             smoothly transforms from what it currently shows toward the new
+             description -- no jarring cut, and the character/scene carry over
+             (a hardcut here instead resets cross-attn -> the model reinvents a
+             different person every chunk = identity flicker);
+          2. SHRINK the self-attn read window so the change actually TAKES rather
+             than being resisted by the old frames in the KV cache (a plain morph
+             at the full window barely moves). Moderate (~6), not aggressive (~3):
+             enough to flush old-attribute momentum while keeping the subject
+             coherent. Pair with a target prompt that shares the subject and only
+             differs in the change, so the morph is focused. restore_window()
+             afterward to settle. Window size = edit-strength knob."""
+        if not new_prompt:
+            return
+        self.ramp_to(new_prompt, k=max(1, int(k)))
+        self._set_window(max(self.nfpb, int(shrink_window)))
+
+    @torch.no_grad()
+    def restore_window(self):
+        """Grow the self-attn window back to full (after a steer's scene has
+        established) so held motion stays coherent."""
+        self._set_window(self.window)
+
+    @torch.no_grad()
     def step(self):
         """Generate one chunk; return its clean latents [1, nfpb, C, H, W]."""
         # advance an in-progress forward ramp (interpolated conditioning this chunk)

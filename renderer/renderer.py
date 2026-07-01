@@ -24,6 +24,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -38,6 +39,109 @@ VENDOR_DIR = Path(__file__).resolve().parent / "vendor"
 FPS = 16                     # pixel-frame rate of the model's output
 LATENT_FPS = 4               # 1 latent frame -> 4 pixel frames (Wan VAE 4x temporal)
 DEFAULT_SECONDS_PER_SHOT = 5.0
+
+
+class RenderControl:
+    """Per-job live control the render loop polls each chunk (real-time mode).
+
+    Two interaction modes drive a job, published as `phase` for the /jobs/{id} poll:
+
+      - "running"   -- the planned beats are generating in order.
+      - "buffering" -- planned beats finished; a countdown runs before composing.
+                       The user can Skip (compose now), Pause/Resume the countdown
+                       (buy time), or Takeover. If it lapses untouched -> compose.
+      - "takeover"  -- the user took control: each Steer is QUEUED into the
+                       diffusion model and rendered in order (one scene per
+                       steer); between/after the queued steers the rollout HOLDS
+                       on the last frame. The ONLY thing that composes is Finish.
+                       Steers are capped at `max_steers`.
+
+    Thread-safe: set from the FastAPI endpoints, read from the render thread.
+    Built on the same idea as the vendored PromptBus (see _docs/NOVELTY.md)."""
+
+    def __init__(self, max_steers: int = 10) -> None:
+        self._lock = threading.Lock()
+        self._queue: list[str] = []  # pending steer prompts (FIFO), drained by the loop
+        self._steers_used = 0        # how many steers have been accepted this session
+        self._max_steers = max(0, int(max_steers))
+        self._takeover = False       # user pressed Takeover
+        self._finished = False       # user pressed Finish / Skip (compose now)
+        self._phase = "running"
+        # countdown (buffering phase only)
+        self._cd_deadline: float | None = None
+        self._cd_remaining: float | None = None
+        self._cd_paused = False
+
+    # -- user actions (called from the endpoints) ----------------------------
+    def request_takeover(self) -> None:
+        with self._lock:
+            self._takeover = True
+
+    def enqueue_steer(self, prompt: str) -> tuple[bool, int]:
+        """Queue one steer. Returns (accepted, steers_remaining). Rejected when
+        empty or the per-session cap is reached."""
+        with self._lock:
+            p = (prompt or "").strip()
+            if not p or self._steers_used >= self._max_steers:
+                return False, max(0, self._max_steers - self._steers_used)
+            self._queue.append(p)
+            self._steers_used += 1
+            return True, self._max_steers - self._steers_used
+
+    def pop_steer(self) -> str | None:
+        """Engine-side: next queued steer prompt, or None if the queue is empty."""
+        with self._lock:
+            return self._queue.pop(0) if self._queue else None
+
+    def finish(self) -> None:
+        with self._lock:
+            self._finished = True
+
+    def pause_countdown(self) -> None:
+        with self._lock:
+            if self._phase == "buffering" and not self._cd_paused and self._cd_deadline is not None:
+                self._cd_remaining = max(0.0, self._cd_deadline - time.monotonic())
+                self._cd_paused = True
+
+    def resume_countdown(self) -> None:
+        with self._lock:
+            if self._phase == "buffering" and self._cd_paused:
+                self._cd_deadline = time.monotonic() + (self._cd_remaining or 0.0)
+                self._cd_paused = False
+
+    # -- engine-side transitions + reads -------------------------------------
+    def enter_buffer(self, seconds: float) -> None:
+        with self._lock:
+            self._phase = "buffering"
+            self._cd_deadline = time.monotonic() + seconds
+            self._cd_remaining = seconds
+            self._cd_paused = False
+
+    def enter_takeover(self) -> None:
+        with self._lock:
+            self._phase = "takeover"
+            self._takeover = True
+            self._cd_deadline = self._cd_remaining = None
+
+    def countdown_lapsed(self) -> bool:
+        with self._lock:
+            return (self._phase == "buffering" and not self._cd_paused
+                    and self._cd_deadline is not None
+                    and time.monotonic() >= self._cd_deadline)
+
+    def flags(self) -> tuple[bool, bool]:
+        """(takeover_requested, finished) -- polled by the render loop."""
+        with self._lock:
+            return self._takeover, self._finished
+
+    def phase_info(self) -> tuple[str, float | None, int]:
+        """(phase, countdown_seconds_remaining, steers_remaining)."""
+        with self._lock:
+            remaining = None
+            if self._phase == "buffering":
+                remaining = (self._cd_remaining if self._cd_paused
+                             else max(0.0, (self._cd_deadline or 0.0) - time.monotonic()))
+            return self._phase, remaining, max(0, self._max_steers - self._steers_used)
 
 # Motion-smoothing post-process: interpolate the 16fps model output up to this fps
 # with ffmpeg's motion-compensated interpolation -- the biggest cheap win for
@@ -55,7 +159,6 @@ class RenderEngine:
         self.seed = seed
         self._pipe = None
         self._StreamingCF = None
-        self._PromptBus = None
 
     @property
     def is_loaded(self) -> bool:
@@ -73,21 +176,12 @@ class RenderEngine:
             return
         if str(VENDOR_DIR) not in sys.path:
             sys.path.insert(0, str(VENDOR_DIR))
-        from cf_streaming import PromptBus, StreamingCF, load_cf_pipeline
+        from cf_streaming import StreamingCF, load_cf_pipeline
 
         t0 = time.time()
         self._pipe = load_cf_pipeline(model=self.model, window=self.window, sink=self.sink)
         self._StreamingCF = StreamingCF
-        self._PromptBus = PromptBus
         logger.info("renderer model %r loaded in %.1fs", self.model, time.time() - t0)
-
-    def new_bus(self):
-        """A thread-safe live-prompt bus for steering a running stream_plan (#5).
-        The frontend POSTs steer text to /jobs/{id}/steer -> bus.set(text); the
-        render loop picks it up at the next chunk boundary."""
-        if self._PromptBus is None:
-            raise RuntimeError("engine not loaded")
-        return self._PromptBus("")
 
     def _render_shot(self, prompt: str, seconds: float, out_path: Path) -> int:
         """Stream one shot to an mp4; returns the pixel-frame count."""
@@ -122,30 +216,33 @@ class RenderEngine:
         return final, count
 
     def stream_plan(self, shots: list[dict], out_dir: str,
-                    seconds_per_shot: float = DEFAULT_SECONDS_PER_SHOT, bus=None):
-        """Generator: render a passage live, yielding each decoded pixel frame as
-        it is produced, then writing the final_story.mp4.
+                    seconds_per_shot: float = DEFAULT_SECONDS_PER_SHOT, control=None,
+                    max_session_frames: int | None = None, buffer_seconds: float = 0.0,
+                    steer_window: int = 6, steer_ramp: int = 4):
+        """Generator: render a passage live as a SEQUENCE of beats, yielding each
+        decoded pixel frame as it is produced, then writing final_story.mp4.
 
-        Live steering (#5): if a PromptBus `bus` is given, the user's typed steer
-        text is appended to the active shot prompt and SLERP-morphed in whenever
-        the bus version changes (and morphed back out when cleared). When the
-        user is not typing the bus version is steady, so nothing changes -- the
-        passage just renders its planned shots.
+        Phases:
 
-        The planner's `continuity` field decides the texture of every shot
-        boundary, and we honour it two different ways:
-          - within a continuous scene ('continuous_frame' / 'cut_same_scene')
-            we keep ONE rollout and SLERP-morph the prompt with ramp_to, so the
-            take flows unbroken with no stitch/seam;
-          - at a genuine scene break ('cut_new_scene') we do a REAL hard cut by
-            starting a FRESH rollout for the next segment -- new noise, cleared
-            KV self-attention + cross-attention + VAE caches -- so the new scene
-            is visually independent and does not morph out of the old one
-            (narrator's face -> a separate insert of the vulture eye, etc).
+        PLANNED -- the beats Claude planned, in order (one shot per action) so a
+        multi-action passage reads sequentially instead of blending. The
+        `continuity` field shapes each boundary: within a scene we keep ONE
+        rollout and SLERP-morph with ramp_to (no seam); at a 'cut_new_scene' we
+        start a FRESH rollout (new noise + cleared KV/cross-attn/VAE caches) = a
+        real hard cut.
 
-        So the shots are partitioned into continuous SEGMENTS at every
-        cut_new_scene; each segment is its own morphing rollout, and the
-        segments are concatenated into the saved mp4.
+        LIVE TAKEOVER -- as soon as the user STEERS, the SAME rollout keeps going
+        OPEN-ENDED toward their prompt (sized to `max_session_frames`), so steering
+        is NOT capped to the planned length. Each further steer is a smooth
+        ramp_to; FINISH (or the session ceiling) ends it and saves.
+
+        BUFFER + HOLD -- if the planned beats finish without a takeover and
+        `buffer_seconds` > 0, we hold on the last frame with a countdown (control
+        phase 'buffering') so the user can still add on; a late steer resumes the
+        SAME rollout open-ended. If the countdown lapses untouched it drops to an
+        indefinite 'paused' hold (nothing saved). FINISH composes; otherwise we
+        keep the MJPEG stream alive by re-emitting the last frame (so a browser
+        disconnect frees the GPU). Real-time mode only; pass a RenderControl.
         """
         if not shots:
             raise ValueError("stream_plan requires at least one shot")
@@ -176,19 +273,42 @@ class RenderEngine:
             else:
                 segments[-1].append(i)
 
-        # Live-steer state persists ACROSS hard cuts: a user modifier ("make it
-        # snow") stays applied to every subsequent scene until they change it.
-        steer_text = ""
-        last_steer_version = 0
-
         all_frames: list[np.ndarray] = []
-        for segment in segments:
-            seg_total = sum(budgets[i] for i in segment)
-            if not prompts[segment[0]]:           # skip a malformed promptless segment head
-                continue
+        last_frame: np.ndarray | None = None
 
-            # latent-frame index WITHIN this segment -> the ramp prompt for an
-            # internal (same-scene) shot change.
+        # Each rollout is allocated to the SESSION CEILING up front (not just its
+        # planned budget): the noise is seeded deterministically, so the planned
+        # beats render identically regardless of allocated length, but there's
+        # headroom to keep stepping the SAME rollout if the user takes over.
+        ceiling = max_session_frames if max_session_frames else int(round(60.0 * LATENT_FPS))
+        ceiling -= ceiling % nfpb
+        ceiling = max(ceiling, nfpb)
+        # Frames generated per Steer in takeover -- one steer's scene, then hold.
+        burst_steps = max(1, (max(nfpb, int(round(seconds_per_shot * LATENT_FPS))) // nfpb))
+
+        def flags():
+            return control.flags() if control is not None else (False, False)
+
+        def emit():
+            nonlocal last_frame
+            for frame in gen.decode_chunk(gen.step()):
+                last_frame = frame
+                all_frames.append(frame)
+                yield frame
+
+        finished = False
+        took_over = False
+
+        # ---- PLANNED phase: the beats Claude planned, in order ----------------
+        for segment in segments:
+            if finished or took_over:
+                break
+            head = prompts[segment[0]]
+            if not head:                          # skip a malformed promptless segment head
+                continue
+            seg_total = sum(budgets[i] for i in segment)
+
+            # latent-frame index WITHIN this segment -> planned beat prompt.
             seg_boundaries: dict[int, str] = {}
             acc = 0
             for j, i in enumerate(segment[1:], start=1):
@@ -196,43 +316,84 @@ class RenderEngine:
                 if prompts[i]:
                     seg_boundaries[acc] = prompts[i]
 
-            gen.start(prompts[segment[0]], total_frames=seg_total)  # fresh rollout = hard cut
+            gen.start(head, total_frames=ceiling)  # fresh rollout (= hard cut at a segment)
             self._pipe.vae.model.clear_cache()
-            active_base = prompts[segment[0]]
-            if steer_text:                        # carry an active steer into the new scene
-                gen.ramp_to(_steer_prompt(active_base, steer_text), k=4)
 
             produced = 0
-            for _ in range(seg_total // nfpb):
-                if produced in seg_boundaries:    # same-scene shot change -> smooth morph
-                    active_base = seg_boundaries[produced]
-                    gen.ramp_to(_steer_prompt(active_base, steer_text), k=8)
-                elif bus is not None:             # user steer -> morph toward it (faster)
-                    steer, version = bus.get()
-                    if version != last_steer_version:
-                        last_steer_version = version
-                        steer_text = steer
-                        gen.ramp_to(_steer_prompt(active_base, steer_text), k=4)
-                den = gen.step()                  # DiT denoise -> clean latents
-                chunk = gen.decode_chunk(den)     # VAE decode -> uint8 [nf,H,W,3]
+            while produced < seg_total:
+                takeover_req, fin = flags()
+                if fin:
+                    finished = True
+                    break
+                if takeover_req:                  # user pressed Takeover -> hand off
+                    took_over = True
+                    break
+                if produced in seg_boundaries:    # planned beat change -> smooth morph
+                    gen.ramp_to(seg_boundaries[produced], k=8)
                 produced += nfpb
-                for frame in chunk:
-                    all_frames.append(frame)
-                    yield frame
+                yield from emit()
+
+        # ---- BUFFER phase: countdown before composing (planned beats finished) -
+        if control is not None and not took_over and not finished and buffer_seconds > 0:
+            control.enter_buffer(buffer_seconds)
+            while True:
+                takeover_req, fin = flags()
+                if fin:                           # Skip -> compose now
+                    finished = True
+                    break
+                if takeover_req:                  # Takeover -> steer mode
+                    took_over = True
+                    break
+                if control.countdown_lapsed():    # lapsed untouched -> compose
+                    break
+                if last_frame is not None:        # keep the stream alive while holding
+                    yield last_frame
+                time.sleep(0.4)
+
+        # ---- TAKEOVER phase: the ONLY exit is FINISH; otherwise hold forever ---
+        # Steers are QUEUED and drained in order. Each is a DECISIVE swap via the
+        # _SPED window-shrink method (gen.steer): a plain prompt swap resists
+        # because the self-attn KV cache holds the old scene, so we hardcut the
+        # conditioning AND shrink the read window so old frames flush fast and the
+        # new prompt actually takes ("baseball cap" shows up). We hold the shrunk
+        # window through the whole takeover for responsive steers, then restore it
+        # for a final settle before composing. Nothing composes on its own; only
+        # Finish breaks the loop.
+        if took_over and not finished:
+            control.enter_takeover()
+            # Long enough for the shrunk window to flush the old scene + establish
+            # the new one (transition time ~= window-flush time).
+            steer_burst = max(burst_steps, (gen.window // nfpb) + 2)
+            steered = False
+            while not finished:
+                _t, fin = flags()
+                if fin:                           # Finish -> compose (the only way out)
+                    break
+                nxt = control.pop_steer() if control is not None else None
+                if nxt is not None and gen.cur_frame < ceiling:
+                    gen.steer(nxt, shrink_window=steer_window, k=steer_ramp)  # _SPED continuous edit
+                    steered = True
+                    for _ in range(steer_burst):  # flush + establish the new scene
+                        if gen.cur_frame >= ceiling:
+                            break
+                        _t2, fin2 = flags()
+                        if fin2:
+                            finished = True
+                            break
+                        yield from emit()
+                else:                             # holding -- standby for next Steer/Finish
+                    if last_frame is not None:
+                        yield last_frame
+                    time.sleep(0.4)
+            if steered:
+                gen.restore_window()              # coherent settle before compose
 
         if all_frames:
             final = out / "final_story.mp4"
             imageio.mimwrite(str(final), np.stack(all_frames), fps=FPS,
                              codec="libx264", macro_block_size=1)
-            logger.info("saved render -> %s (%d frames, %d shots, %d segments)",
-                        final, len(all_frames), len(shots), len(segments))
-
-
-def _steer_prompt(base: str, steer: str) -> str:
-    """Combine the active planned shot prompt with the user's live steer text
-    (#5). Empty steer -> the unmodified planned prompt (steady state)."""
-    steer = (steer or "").strip()
-    return f"{base} {steer}" if steer else base
+            logger.info("saved render -> %s (%d frames, %d shots, %d segments, takeover=%s)",
+                        final, len(all_frames), len(shots), len(segments), took_over)
 
 
 def _ffmpeg_concat(clips: list[Path], final: Path) -> None:

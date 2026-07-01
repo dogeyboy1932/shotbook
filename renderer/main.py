@@ -35,8 +35,8 @@ from pydantic import BaseModel
 
 from renderer.config import settings
 from renderer.ingest import router as ingest_router
-from renderer.planning import VideoPlanningError, compose_scene, generate_video_plan
-from renderer.renderer import RenderEngine
+from renderer.planning import VideoPlanningError, compose_scene, compose_steer_prompt, generate_video_plan
+from renderer.renderer import RenderControl, RenderEngine
 from renderer.schema import RenderRequest, RenderResponse
 from renderer.schemas import GenerateRequest
 
@@ -93,10 +93,17 @@ async def health() -> dict:
 # ---------------------------------------------------------------------------
 # Shared MJPEG framing
 # ---------------------------------------------------------------------------
-def _mjpeg(shots: list[dict], out_dir: str, seconds_per_shot: float, bus=None):
+def _mjpeg(shots: list[dict], out_dir: str, seconds_per_shot: float, control=None):
     """Run the seamless rollout and yield multipart/x-mixed-replace JPEG frames."""
+    # Open-ended steering ceiling (latent frames): once the user takes over, the
+    # rollout may run up to this long regardless of the planned length.
+    max_session_frames = int(round(settings.max_session_seconds * 4))  # LATENT_FPS=4
     with _stream_lock:  # one render at a time on the single GPU
-        for frame in engine.stream_plan(shots, out_dir, seconds_per_shot, bus=bus):
+        for frame in engine.stream_plan(shots, out_dir, seconds_per_shot,
+                                         control=control, max_session_frames=max_session_frames,
+                                         buffer_seconds=settings.realtime_buffer_seconds,
+                                         steer_window=settings.realtime_steer_window,
+                                         steer_ramp=settings.realtime_steer_ramp_chunks):
             bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
             ok, jpg = cv2.imencode(".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
             if not ok:
@@ -134,7 +141,12 @@ async def generate(req: GenerateRequest) -> dict:
         "seconds_per_shot": req.seconds_per_shot or None,
         "video_path": None,
         "error": None,
-        "bus": engine.new_bus(),  # live-steer channel for /jobs/{id}/steer (#5)
+        # Running description of what the current frame shows, seeded from the
+        # LAST planned shot (the frame takeover holds on). Each steer edits this.
+        "steer_context": plan.shots[-1].prompt if plan.shots else "",
+        "style": plan.world.look,
+        # live-control channel for /jobs/{id}/{steer,takeover,pause,resume,finish}
+        "control": RenderControl(max_steers=settings.max_steers_per_session),
     }
     return {"job_id": job_id, "scene": scene.model_dump()}
 
@@ -144,13 +156,35 @@ def get_job(job_id: str) -> dict:
     job = _jobs.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
+    control = job.get("control")
+    # phase: running | buffering | takeover  (drives the real-time UI controls)
+    phase, buffer_remaining, steers_remaining = (
+        control.phase_info() if control is not None else (None, None, 0))
+    running = job["status"] == "running"
     return {
         "job_id": job_id,
         "status": job["status"],
         "stream_url": f"/jobs/{job_id}/stream" if job["status"] in ("planned", "running") else None,
         "video_url": f"/jobs/{job_id}/video" if job["status"] == "done" else None,
         "error": job.get("error"),
+        "phase": phase if running else None,
+        "buffer_remaining": buffer_remaining if running else None,
+        "steers_remaining": steers_remaining if running else None,
     }
+
+
+def _reclaim_gpu(except_job: str) -> None:
+    """Starting a new render implicitly ends any other one: signal every OTHER
+    running job to finish so it releases the single-GPU stream lock. Without this
+    an ABANDONED takeover (the user took over, never hit Finish, then reloaded and
+    generated again) would hold the GPU forever and every new render would block
+    on its last frame ("stuck on the buffer screen"). The old loop sees the finish
+    flag within ~0.4s, composes what it has, and frees the lock."""
+    for jid, j in _jobs.items():
+        if jid != except_job and j.get("status") == "running":
+            ctl = j.get("control")
+            if ctl is not None:
+                ctl.finish()
 
 
 @app.get("/jobs/{job_id}/stream")
@@ -166,6 +200,9 @@ def job_stream(job_id: str) -> StreamingResponse:
     if not engine.is_loaded:
         raise HTTPException(status_code=503, detail="model not loaded yet")
 
+    # Reclaim the GPU from any stranded prior render before we queue behind its lock.
+    _reclaim_gpu(job_id)
+
     with _stream_lock:  # guard the started-set; the render lock is taken inside _mjpeg
         if job_id in _streams_started:
             raise HTTPException(status_code=409, detail="stream already in progress")
@@ -174,12 +211,12 @@ def job_stream(job_id: str) -> StreamingResponse:
     job_dir = JOBS_DIR / job_id
     seconds = job["seconds_per_shot"] or _planning_settings_seconds()
     shots = job["plan"]["shots"]
-    bus = job.get("bus")
+    control = job.get("control")
     _jobs[job_id]["status"] = "running"
 
     def frames():
         try:
-            yield from _mjpeg(shots, str(job_dir), seconds, bus=bus)
+            yield from _mjpeg(shots, str(job_dir), seconds, control=control)
             _save_final_mp4(job_id, job_dir)
         except Exception as exc:  # noqa: BLE001 - surface render failures into the job
             _jobs[job_id]["status"] = "failed"
@@ -207,19 +244,69 @@ class SteerRequest(BaseModel):
     prompt: str = ""
 
 
-@app.post("/jobs/{job_id}/steer")
-def steer_job(job_id: str, req: SteerRequest) -> dict:
-    """Live-steer a running real-time render (#5): set the user's typed modifier
-    on the job's PromptBus; the render loop morphs toward it at the next chunk.
-    An empty prompt clears the steer (frames drift back to the planned shot)."""
+def _job_control(job_id: str) -> RenderControl:
     job = _jobs.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
-    bus = job.get("bus")
-    if bus is None:
-        raise HTTPException(status_code=409, detail="job has no steer channel")
-    bus.set(req.prompt)
-    return {"ok": True}
+    control = job.get("control")
+    if control is None:
+        raise HTTPException(status_code=409, detail="job has no live-control channel")
+    return control
+
+
+@app.post("/jobs/{job_id}/takeover")
+def takeover_job(job_id: str) -> dict:
+    """Enter takeover mode: the render hands control to the user. Generation
+    holds on the last frame until they Steer; each steer renders that scene then
+    holds again (no countdown, no auto-finish)."""
+    _job_control(job_id).request_takeover()
+    return {"ok": True, "phase": "takeover"}
+
+
+@app.post("/jobs/{job_id}/steer")
+async def steer_job(job_id: str, req: SteerRequest) -> dict:
+    """In takeover mode, QUEUE a steer -- it edits the current frame then holds.
+    Capped at max_steers_per_session; returns whether accepted + how many remain.
+
+    The change is merged (via Claude) with the CURRENT frame's description so the
+    engine morphs the same frame (hood -> cap on the same man) instead of cutting
+    to a new character. The running description is updated so the next steer builds
+    off this one."""
+    job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    control = job.get("control")
+    if control is None:
+        raise HTTPException(status_code=409, detail="job has no live-control channel")
+    prompt = await compose_steer_prompt(job.get("steer_context", ""), req.prompt, style=job.get("style", ""))
+    accepted, remaining = control.enqueue_steer(prompt)
+    if accepted:
+        job["steer_context"] = prompt  # build the next change off this frame
+    return {"ok": True, "accepted": accepted, "steers_remaining": remaining}
+
+
+@app.post("/jobs/{job_id}/pause")
+def pause_job(job_id: str) -> dict:
+    """Pause the post-plan COUNTDOWN so the user has time to decide (buffering
+    phase only). No effect once generating/in takeover."""
+    _job_control(job_id).pause_countdown()
+    return {"ok": True, "paused": True}
+
+
+@app.post("/jobs/{job_id}/resume")
+def resume_job(job_id: str) -> dict:
+    """Resume the paused countdown."""
+    _job_control(job_id).resume_countdown()
+    return {"ok": True, "paused": False}
+
+
+@app.post("/jobs/{job_id}/finish")
+def finish_job(job_id: str) -> dict:
+    """Compose & save now: the rollout stops at the next chunk and the mp4
+    (everything generated so far) is saved. This is Skip (during the countdown)
+    and Finish (during takeover)."""
+    _job_control(job_id).finish()
+    return {"ok": True, "finishing": True}
 
 
 def _save_final_mp4(job_id: str, job_dir: Path) -> None:
