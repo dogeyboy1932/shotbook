@@ -37,6 +37,7 @@ supabase.txt
 private_key.pem
 *.pem
 
+
 # --- Reference repo (the other team's _SPED; 761MB + its own nested .git) ---
 # The renderer only needs the vendored engine subset under services/renderer/vendor.
 _SPED/
