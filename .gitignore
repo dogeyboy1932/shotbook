@@ -17,7 +17,6 @@ wan_models/
 *.safetensors
 
 # --- Rendered video outputs ---
-*.mp4
 
 # --- Python Caching & Bytecode ---
 __pycache__/
